@@ -1,139 +1,100 @@
-# UV & Texture Generator
+# 👻🔥 GhostForge
 
-Automatically generate UV maps and textures for existing 3D models.  
-Upload any mesh → get back a fully textured, UV-unwrapped model.
+**Open source 3D creation suite with integrated AI partnership.**
+
+GhostForge combines UV unwrapping, texture generation, image-to-3D mesh generation, and a built-in AI co-creator into one unified workspace. Enter your own API key and your chosen AI works *alongside* you — it can see your scene, understand your workflow, and guide you in real time.
 
 > Based on [Modly](https://github.com/lightningpixel/modly) by Lightning Pixel (MIT License)
 
 ---
 
-## Features
+## Vision
 
-| Feature | Technology |
-|---------|-----------|
-| Automatic UV unwrapping | **xatlas** (ABF++ + RBPF atlas packing) |
-| Procedural texture generation | Custom PIL-based layered synthesizer |
-| AI texture generation | **Stable Diffusion** via 🤗 diffusers |
-| Reference image style transfer | SD img2img pipeline |
-| 3D preview in browser | **Three.js** + GLTFLoader |
-| Supported input formats | OBJ, GLB, GLTF, STL, PLY, DAE |
-| Supported output formats | GLB (binary glTF), OBJ + MTL |
+> *"The power should be with the people, not the companies."*
+
+GhostForge is the open-source answer to a suite of tools that should never have been locked behind corporate paywalls:
+
+| Replaces | With |
+|---------|------|
+| RizomUV | xatlas (ABF++ UV unwrapping) |
+| Substance Painter | Stable Diffusion AI texturing |
+| Modly / Hunyuan3D | Image → 3D mesh generation |
+| Maya/Blender viewport | React Three Fiber 3D workspace |
+| No equivalent existed | AI partner with full scene context |
 
 ---
 
-## How It Works
+## Features
 
-```
-Input Mesh
-    │
-    ▼
-[xatlas UV Unwrap]
-    │  ABF++ angle-based flattening
-    │  RBPF atlas island packing
-    │
-    ▼
-[Texture Generation]
-    │  Procedural (fast, no GPU needed)  OR
-    │  Stable Diffusion (AI, better quality)
-    │  Reference image blending (optional)
-    │
-    ▼
-[Apply + Export]
-    │  Texture baked into UV space
-    │  GLB or OBJ output
-    ▼
-Textured Mesh + Texture PNG + UV Layout PNG
-```
+### ✅ Built (Phase 1)
+- **Automatic UV unwrapping** — xatlas ABF++ algorithm, production quality
+- **Procedural texture generation** — instant, no GPU needed, keyword-driven
+- **AI texture generation** — Stable Diffusion via diffusers
+- **Reference image style transfer** — SD img2img pipeline
+- **Image-to-3D** — Hunyuan3D / TripoSG / TRELLIS extension system (from Modly)
+- **3D viewport** — React Three Fiber + OrbitControls
+- **AI chat panel** — streaming, real-time, scene-aware
+- **API key settings** — OpenAI / Anthropic / Ollama / any OpenAI-compatible
+- **Scene hierarchy** — import, list, select, remove objects
+- **Properties panel** — UV controls, texture controls, per-object settings
+
+### 🔜 Roadmap (Phase 2+)
+- PBR texture painter (paint directly on mesh)
+- Auto-rigging (RigNet / AccuRIG-equivalent)
+- Sculpting tools (OpenVDB / libigl)
+- MCP tool calls (AI can directly trigger unwrap/texture/export)
+- Extension system (install AI models from GitHub like Modly)
+- Packaged desktop builds (Windows / Linux / macOS via Electron)
+
+---
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Desktop shell | Electron 33 |
+| UI framework | React 18 + Vite + Tailwind |
+| 3D viewport | React Three Fiber + Three.js |
+| State management | Zustand (persisted settings) |
+| Python backend | Flask + FastAPI |
+| UV unwrapping | xatlas (ABF++ + RBPF packing) |
+| Mesh processing | trimesh + PyMeshLab |
+| AI texturing | Stable Diffusion via diffusers |
+| AI chat | OpenAI-compatible streaming API |
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
+# 1. Install Python dependencies
 pip install xatlas trimesh flask flask-cors pillow numpy scipy open3d
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install diffusers transformers accelerate
 
-# 2. Start the server
-cd api
-python3 app.py
+# 2. Start Python backend
+cd api && python3 app.py
 
-# 3. Open browser
-# http://localhost:5000
+# 3. Install JS dependencies
+npm install
+
+# 4. Run the app (web preview)
+npx vite --config vite.web.config.js
+
+# 5. Or package as desktop app
+npm run package
 ```
 
 ---
 
-## Project Structure
+## AI Integration
 
-```
-webapp/
-├── api/
-│   ├── app.py          ← Flask REST API server
-│   ├── pipeline.py     ← Main processing pipeline
-│   ├── uv_unwrap.py    ← xatlas UV unwrapping module
-│   └── texture_gen.py  ← Procedural + AI texture generation
-├── static/
-│   ├── css/style.css   ← Dark theme UI styles
-│   └── js/app.js       ← Frontend app (Three.js + fetch API)
-├── templates/
-│   └── index.html      ← Main web UI
-├── uploads/            ← Uploaded meshes (per job)
-└── outputs/            ← Generated files (per job)
-```
+GhostForge uses a fully open API key system. In Settings, enter:
+- Your API key (OpenAI, Anthropic, Together AI, or any provider)
+- Your chosen model (GPT-4o, Claude, Llama, Mistral, etc.)
+- The API base URL (works with Ollama for 100% local/offline AI)
 
----
-
-## API Reference
-
-### `POST /api/jobs`
-Start a new UV + texture job.
-
-**Form fields:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mesh` | file | ✓ | 3D model (OBJ/GLB/STL/PLY/DAE) |
-| `prompt` | string | ✓ | Texture description |
-| `reference` | file | — | Reference image for style |
-| `texture_size` | int | — | 512/1024/2048 (default: 1024) |
-| `output_format` | string | — | "glb" or "obj" (default: "glb") |
-| `use_ai` | bool | — | Use Stable Diffusion (default: false) |
-| `ai_steps` | int | — | SD inference steps (default: 20) |
-
-**Response:** `{ "job_id": "...", "status": "queued" }`
-
-### `GET /api/jobs/<job_id>`
-Poll job status and results.
-
-### `GET /api/jobs/<job_id>/download/<type>`
-Download output files. `type` = `mesh` | `texture` | `uv_layout`
-
----
-
-## Texture Mode Comparison
-
-| Mode | Speed | Quality | GPU Required |
-|------|-------|---------|--------------|
-| Procedural | ~0.3s | Good for previewing | No |
-| Stable Diffusion (20 steps) | ~5-10min CPU / ~20s GPU | Excellent | Recommended |
-| SD + reference image | ~5-10min CPU / ~20s GPU | Best | Recommended |
-
----
-
-## xatlas UV Unwrapping
-
-xatlas is used by major game studios and is the same algorithm powering many
-professional tools. It implements:
-
-- **ABF++ (Angle-Based Flattening)** — minimises angular distortion in each UV island
-- **LSCM (Least Squares Conformal Maps)** — conformal parametrization
-- **RBPF bin packing** — efficiently packs UV islands into the atlas with configurable padding
-
-The result is a production-quality UV layout with:
-- Minimal stretching and distortion
-- No overlapping islands
-- Configurable padding between islands (prevents texture bleeding)
+The AI receives your **full scene context** automatically — which models are loaded, which are selected, UV and texture status. It's not "ask AI to do everything" — it's a genuine creative partner that can see what you're working on and help you make decisions.
 
 ---
 
@@ -142,5 +103,7 @@ The result is a production-quality UV layout with:
 - **xatlas** — https://github.com/jpcy/xatlas (MIT)
 - **trimesh** — https://github.com/mikedh/trimesh (MIT)
 - **diffusers** — https://github.com/huggingface/diffusers (Apache 2.0)
-- **Modly** — https://github.com/lightningpixel/modly (MIT) — original inspiration
+- **Modly** — https://github.com/lightningpixel/modly (MIT) — image-to-3D extension system
+- **React Three Fiber** — https://github.com/pmndrs/react-three-fiber (MIT)
 - **Three.js** — https://threejs.org (MIT)
+- **Zustand** — https://github.com/pmndrs/zustand (MIT)
