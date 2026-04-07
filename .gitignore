@@ -1,0 +1,13 @@
+node_modules/
+outputs/
+uploads/
+__pycache__/
+*.pyc
+*.pyo
+.env
+dist/
+.DS_Store
+*.log
+api/__pycache__/
+api/core/
+core/
