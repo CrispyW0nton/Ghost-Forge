@@ -1,0 +1,33 @@
+{
+  "job_id": "b8e35491-5228-44fb-a4b6-d79569320324",
+  "input": "/home/user/webapp/uploads/b8e35491-5228-44fb-a4b6-d79569320324/test_sphere.obj",
+  "prompt": "polished marble, white and grey veins, luxury surface",
+  "texture_size": 512,
+  "use_ai": false,
+  "output_mesh": "/home/user/webapp/outputs/b8e35491-5228-44fb-a4b6-d79569320324/test_sphere_textured.glb",
+  "texture_map": "/home/user/webapp/outputs/b8e35491-5228-44fb-a4b6-d79569320324/test_sphere_texture.png",
+  "uv_layout": "/home/user/webapp/outputs/b8e35491-5228-44fb-a4b6-d79569320324/test_sphere_uv_layout.png",
+  "original_stats": {
+    "vertices": 642,
+    "faces": 1280,
+    "bounds": [
+      [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      [
+        1.0,
+        1.0,
+        1.0
+      ]
+    ],
+    "watertight": true
+  },
+  "uv_stats": {
+    "unwrapped_vertices": 791,
+    "uv_coords": 791,
+    "uv_expansion": 1.232
+  },
+  "processing_time_seconds": 0.43
+}

@@ -1,0 +1,33 @@
+{
+  "job_id": "test_job",
+  "input": "/home/user/webapp/uploads/test_torus.obj",
+  "prompt": "rusted iron surface, dark red, rough, oxidised metal",
+  "texture_size": 512,
+  "use_ai": false,
+  "output_mesh": "/home/user/webapp/outputs/test_job/test_torus_textured.glb",
+  "texture_map": "/home/user/webapp/outputs/test_job/test_torus_texture.png",
+  "uv_layout": "/home/user/webapp/outputs/test_job/test_torus_uv_layout.png",
+  "original_stats": {
+    "vertices": 800,
+    "faces": 1600,
+    "bounds": [
+      [
+        -1.35,
+        -1.35,
+        -0.35
+      ],
+      [
+        1.35,
+        1.35,
+        0.35
+      ]
+    ],
+    "watertight": true
+  },
+  "uv_stats": {
+    "unwrapped_vertices": 1024,
+    "uv_coords": 1024,
+    "uv_expansion": 1.28
+  },
+  "processing_time_seconds": 0.37
+}

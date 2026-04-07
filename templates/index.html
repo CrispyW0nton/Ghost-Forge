@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UV & Texture Generator</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <!-- Three.js for 3D preview -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- GLTFLoader for GLB preview -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <rect x="2" y="2" width="28" height="28" rx="6" fill="url(#grad)"/>
+          <path d="M8 16 L16 8 L24 16 L16 24 Z" fill="white" opacity="0.9"/>
+          <path d="M12 16 L16 12 L20 16 L16 20 Z" fill="white" opacity="0.5"/>
+          <defs>
+            <linearGradient id="grad" x1="0" y1="0" x2="32" y2="32">
+              <stop offset="0%" stop-color="#6366f1"/>
+              <stop offset="100%" stop-color="#a855f7"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <span>UV &amp; Texture Generator</span>
+      </div>
+      <div class="header-badge">
+        Based on <a href="https://github.com/lightningpixel/modly" target="_blank">Modly</a> by Lightning Pixel (MIT)
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Left Panel: Controls -->
+    <section class="panel panel--controls">
+
+      <!-- Step 1: Upload Mesh -->
+      <div class="card" id="step-mesh">
+        <div class="card__header">
+          <span class="step-num">1</span>
+          <h2>Upload 3D Model</h2>
+        </div>
+        <div class="drop-zone" id="mesh-drop-zone">
+          <div class="drop-zone__icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17,8 12,3 7,8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <p class="drop-zone__text">Drop your model here or <label for="mesh-input" class="link">browse</label></p>
+          <p class="drop-zone__hint">OBJ · GLB · GLTF · STL · PLY · DAE</p>
+          <input type="file" id="mesh-input" accept=".obj,.glb,.gltf,.stl,.ply,.dae,.fbx" hidden />
+        </div>
+        <div class="file-preview" id="mesh-preview" style="display:none">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14,2 14,8 20,8"/>
+          </svg>
+          <span id="mesh-filename">—</span>
+          <button class="btn-icon" id="mesh-clear" title="Remove">✕</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Texture Prompt -->
+      <div class="card" id="step-prompt">
+        <div class="card__header">
+          <span class="step-num">2</span>
+          <h2>Describe the Texture</h2>
+        </div>
+        <textarea
+          id="prompt-input"
+          class="textarea"
+          placeholder="e.g. rusted iron surface, weathered, dark, detailed PBR material"
+          rows="3"
+        >worn metal surface, aged, rusty, detailed PBR material</textarea>
+
+        <div class="quick-prompts">
+          <span class="quick-prompts__label">Quick:</span>
+          <button class="chip" data-prompt="polished marble, white and grey veins, luxury">Marble</button>
+          <button class="chip" data-prompt="rough oak wood, natural grain, weathered, brown">Oak Wood</button>
+          <button class="chip" data-prompt="rusted iron, dark red, oxidised, rough surface">Rusted Iron</button>
+          <button class="chip" data-prompt="smooth concrete, grey, industrial, subtle cracks">Concrete</button>
+          <button class="chip" data-prompt="worn leather, brown, stitched, cracked surface">Leather</button>
+          <button class="chip" data-prompt="glowing lava, hot, orange red, cracked earth">Lava</button>
+          <button class="chip" data-prompt="arctic ice, translucent blue, frozen, crystal">Ice</button>
+          <button class="chip" data-prompt="brushed gold metal, shiny, luxury, warm tone">Gold</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Reference Image (optional) -->
+      <div class="card" id="step-reference">
+        <div class="card__header">
+          <span class="step-num">3</span>
+          <h2>Reference Image <span class="optional">optional</span></h2>
+        </div>
+        <div class="drop-zone drop-zone--small" id="ref-drop-zone">
+          <div class="drop-zone__icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+              <polyline points="21,15 16,10 5,21"/>
+            </svg>
+          </div>
+          <p class="drop-zone__text">Drop an image or <label for="ref-input" class="link">browse</label></p>
+          <p class="drop-zone__hint">PNG · JPG · WEBP</p>
+          <input type="file" id="ref-input" accept=".png,.jpg,.jpeg,.webp,.bmp" hidden />
+        </div>
+        <div class="file-preview" id="ref-preview" style="display:none">
+          <img id="ref-thumb" class="ref-thumb" src="" alt="Reference" />
+          <span id="ref-filename">—</span>
+          <button class="btn-icon" id="ref-clear" title="Remove">✕</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Settings -->
+      <div class="card" id="step-settings">
+        <div class="card__header">
+          <span class="step-num">4</span>
+          <h2>Settings</h2>
+        </div>
+
+        <div class="settings-grid">
+          <label class="setting">
+            <span class="setting__label">Texture Resolution</span>
+            <select id="texture-size" class="select">
+              <option value="512">512 × 512 (fast)</option>
+              <option value="1024" selected>1024 × 1024 (default)</option>
+              <option value="2048">2048 × 2048 (high quality)</option>
+            </select>
+          </label>
+
+          <label class="setting">
+            <span class="setting__label">Output Format</span>
+            <select id="output-format" class="select">
+              <option value="glb" selected>GLB (binary glTF)</option>
+              <option value="obj">OBJ + MTL</option>
+            </select>
+          </label>
+
+          <label class="setting setting--toggle">
+            <span class="setting__label">
+              Stable Diffusion AI
+              <span class="badge badge--warn">Slow on CPU</span>
+            </span>
+            <label class="toggle">
+              <input type="checkbox" id="use-ai" />
+              <span class="toggle__slider"></span>
+            </label>
+          </label>
+
+          <label class="setting" id="ai-steps-setting" style="display:none">
+            <span class="setting__label">AI Inference Steps <span id="ai-steps-val">20</span></span>
+            <input type="range" id="ai-steps" min="10" max="50" value="20" class="slider" />
+          </label>
+        </div>
+      </div>
+
+      <!-- Generate Button -->
+      <button class="btn btn--primary btn--full" id="generate-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="5,3 19,12 5,21"/>
+        </svg>
+        Generate UV &amp; Texture
+      </button>
+    </section>
+
+    <!-- Right Panel: Results -->
+    <section class="panel panel--results">
+
+      <!-- Progress -->
+      <div class="card" id="progress-card" style="display:none">
+        <div class="card__header">
+          <h2>Processing…</h2>
+        </div>
+        <div class="progress-stage" id="progress-stage">Queued</div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+        </div>
+        <div class="progress-pct" id="progress-pct">0%</div>
+      </div>
+
+      <!-- Results -->
+      <div id="results-section" style="display:none">
+
+        <!-- 3D Preview -->
+        <div class="card card--preview">
+          <div class="card__header">
+            <h2>3D Preview</h2>
+            <span class="card__hint">Drag to rotate · Scroll to zoom</span>
+          </div>
+          <div id="three-container"></div>
+        </div>
+
+        <!-- Texture Maps -->
+        <div class="results-images">
+          <div class="card card--image">
+            <div class="card__header"><h2>Generated Texture</h2></div>
+            <img id="texture-preview" class="result-img" src="" alt="Texture" />
+          </div>
+          <div class="card card--image">
+            <div class="card__header"><h2>UV Layout</h2></div>
+            <img id="uv-preview" class="result-img" src="" alt="UV Layout" />
+          </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="card card--stats" id="stats-card">
+          <div class="card__header"><h2>Statistics</h2></div>
+          <div class="stats-grid" id="stats-grid"></div>
+        </div>
+
+        <!-- Downloads -->
+        <div class="card card--downloads">
+          <div class="card__header"><h2>Download</h2></div>
+          <div class="download-row">
+            <button class="btn btn--download" id="dl-mesh">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7,10 12,15 17,10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Textured Mesh
+            </button>
+            <button class="btn btn--download" id="dl-texture">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7,10 12,15 17,10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Texture PNG
+            </button>
+            <button class="btn btn--download" id="dl-uv">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7,10 12,15 17,10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              UV Layout PNG
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div class="empty-state" id="empty-state">
+        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
+        </svg>
+        <p>Upload a model and click <strong>Generate</strong> to begin</p>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
