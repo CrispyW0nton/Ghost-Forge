@@ -478,12 +478,14 @@ function PropertiesTab({ selected }) {
 
 // ─── UV Tab ──────────────────────────────────────────────────────────────────
 function UVTab({ selected }) {
-  const [atlasSize, setAtlasSize] = useState(1024)
-  const [padding, setPadding]     = useState(2)
-  const [running, setRunning]     = useState(false)
-  const [progress, setProgress]   = useState(null)
-  const [uvPreview, setUvPreview] = useState(null)
-  const [doneJobId, setDoneJobId] = useState(null)
+  const [atlasSize, setAtlasSize]   = useState(1024)
+  const [padding, setPadding]       = useState(2)
+  const [forceUnwrap, setForce]     = useState(false)
+  const [running, setRunning]       = useState(false)
+  const [progress, setProgress]     = useState(null)
+  const [uvPreview, setUvPreview]   = useState(null)
+  const [doneJobId, setDoneJobId]   = useState(null)
+  const [lastResult, setLastResult] = useState(null)
   const { updateObject, setActiveJob, clearActiveJob } = useSceneStore()
 
   if (!selected) return <Empty msg="Select an object to unwrap UVs" />
@@ -493,15 +495,17 @@ function UVTab({ selected }) {
     setRunning(true)
     setDoneJobId(null)
     setUvPreview(null)
+    setLastResult(null)
     setProgress({ stage: 'INITIALISING', progress: 0 })
 
     try {
       const job = await createUVTextureJob({
-        meshFile: selected.file,
-        prompt: 'placeholder',
+        meshFile:    selected.file,
+        prompt:      'uv unwrap only',
         textureSize: atlasSize,
-        outputFormat: 'glb',
-        uvOnly: true,
+        outputFormat:'glb',
+        uvOnly:      true,
+        forceUnwrap,
       })
       setActiveJob({ id: job.job_id, type: 'UV_UNWRAP', status: 'running', progress: 0, stage: 'STARTING' })
 
@@ -514,10 +518,10 @@ function UVTab({ selected }) {
           clearActiveJob()
           setDoneJobId(j.id)
           setUvPreview(getPreviewUrl(j.id, 'uv_layout'))
-          // Auto-load the output GLB in the viewport
+          setLastResult(j.result)
           updateObject(selected.id, {
             uvDone: true,
-            jobId: j.id,
+            jobId:  j.id,
             previewUrl: getGlbPreviewUrl(j.id),
           })
         },
@@ -532,6 +536,11 @@ function UVTab({ selected }) {
       setProgress({ stage: `ERR: ${e.message}`, progress: 0 })
     }
   }
+
+  const wasDecimated  = lastResult?.uv_stats?.decimated
+  const skippedUnwrap = lastResult?.uv_stats?.skipped_unwrap
+  const origFaces     = lastResult?.original_stats?.faces
+  const uvVerts       = lastResult?.uv_stats?.unwrapped_vertices
 
   return (
     <div style={{ padding: 10 }}>
@@ -551,6 +560,19 @@ function UVTab({ selected }) {
             style={{ width: '100%' }}
           />
         </FieldRow>
+
+        <FieldRow label="FORCE_RE-UNWRAP">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <MatrixToggle checked={forceUnwrap} onChange={setForce} />
+            <span style={{
+              fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.07em',
+              color: forceUnwrap ? 'var(--gf-neon)' : 'var(--gf-text-3)',
+              textShadow: forceUnwrap ? '0 0 5px var(--gf-neon)' : 'none',
+            }}>
+              {forceUnwrap ? 'ALWAYS_REGENERATE_UVs' : 'REUSE_IF_PRESENT'}
+            </span>
+          </div>
+        </FieldRow>
       </Section>
 
       {/* Algorithm info */}
@@ -563,8 +585,8 @@ function UVTab({ selected }) {
         fontFamily: 'monospace', letterSpacing: '0.06em',
         lineHeight: 1.7,
       }}>
-        // Algorithm: xatlas ABF++<br/>
-        // Pro-grade UV unwrapping engine
+        // Algorithm: xatlas ABF++ (subprocess-isolated)<br/>
+        // Safe limit: &lt;100k faces — auto-decimates above
       </div>
 
       <MatrixActionBtn
@@ -577,6 +599,45 @@ function UVTab({ selected }) {
       {progress && (
         <div style={{ marginTop: 10 }}>
           <ProgressBar stage={progress.stage} pct={progress.progress} />
+        </div>
+      )}
+
+      {/* Post-job status pills */}
+      {lastResult && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+          {wasDecimated && (
+            <div style={{
+              padding: '3px 8px', fontSize: 8, fontFamily: 'monospace',
+              background: 'rgba(255,165,0,0.12)',
+              border: '1px solid rgba(255,165,0,0.4)',
+              borderRadius: 2, color: '#FFA500',
+              letterSpacing: '0.07em',
+            }}>
+              ⚠ DECIMATED: {origFaces?.toLocaleString()} → ~18k faces
+            </div>
+          )}
+          {skippedUnwrap && (
+            <div style={{
+              padding: '3px 8px', fontSize: 8, fontFamily: 'monospace',
+              background: 'rgba(0,229,255,0.08)',
+              border: '1px solid rgba(0,229,255,0.3)',
+              borderRadius: 2, color: 'var(--gf-cyan)',
+              letterSpacing: '0.07em',
+            }}>
+              ✓ REUSED_EXISTING_UVs
+            </div>
+          )}
+          {uvVerts && (
+            <div style={{
+              padding: '3px 8px', fontSize: 8, fontFamily: 'monospace',
+              background: 'rgba(57,255,20,0.06)',
+              border: '1px solid var(--gf-border)',
+              borderRadius: 2, color: 'var(--gf-text-3)',
+              letterSpacing: '0.07em',
+            }}>
+              {uvVerts?.toLocaleString()} UV verts
+            </div>
+          )}
         </div>
       )}
 
@@ -593,7 +654,6 @@ function UVTab({ selected }) {
             </div>
           </Section>
 
-          {/* Download row */}
           {doneJobId && (
             <JobOutputPanel jobId={doneJobId} hasTexture={false} />
           )}
@@ -668,18 +728,118 @@ function TextureTab({ selected }) {
     }
   }
 
-  const quickPrompts = [
-    ['RUST',     'rusted iron, oxidised, worn metal, surface corrosion'],
-    ['MARBLE',   'polished marble, white veins, luxury stone surface'],
-    ['WOOD',     'aged oak wood grain, natural knots, warm tones'],
-    ['CONCRETE', 'raw concrete, grey, brutalist, rough texture'],
-    ['LEATHER',  'dark leather, stitched seams, worn, tactile'],
-    ['GOLD',     'polished gold, metallic, highly reflective'],
-    ['MATRIX',   'dark circuit board, green neon traces, cyberpunk tech'],
-    ['STONE',    'ancient stone, weathered, cracked, mossy'],
-    ['CARBON',   'carbon fiber weave, matte black, modern composite'],
-    ['SAND',     'desert sand, fine grain, warm ochre tones'],
+  // Grouped material quick-prompts (v1.4 — 40+ presets across 8 categories)
+  const quickPromptGroups = [
+    {
+      label: 'METALS',
+      color: '#B0C4DE',
+      prompts: [
+        ['STEEL',     'brushed steel, industrial metal, fine scratches'],
+        ['RUST',      'rusted iron, oxidised, heavy corrosion, surface decay'],
+        ['CHROME',    'mirror chrome, polished reflective metal'],
+        ['GOLD',      'polished gold, metallic sheen, luxury finish'],
+        ['COPPER',    'aged copper, patina, green oxidation'],
+        ['BRONZE',    'cast bronze, antique finish, dark patina'],
+        ['SILVER',    'polished silver, clean reflective surface'],
+        ['TITANIUM',  'dark titanium, gunmetal, aerospace alloy'],
+        ['ROSE GOLD', 'rose gold, pink gold, warm metallic'],
+      ],
+    },
+    {
+      label: 'WOOD',
+      color: '#C8A96E',
+      prompts: [
+        ['OAK',       'aged oak wood grain, natural knots, warm tones'],
+        ['WALNUT',    'dark walnut wood, fine grain, rich brown'],
+        ['PINE',      'light pine wood, pale grain, knots'],
+        ['MAHOGANY',  'mahogany wood, reddish-brown, polished'],
+        ['EBONY',     'ebony wood, dark exotic grain, near-black'],
+        ['BAMBOO',    'bamboo stalk, pale green-yellow, segmented'],
+        ['DRIFTWOOD', 'driftwood, bleached wood, weathered, cracked pale'],
+        ['BARK',      'rough tree bark, ridged, dark brown, mossy bark'],
+      ],
+    },
+    {
+      label: 'STONE',
+      color: '#A0A0A8',
+      prompts: [
+        ['MARBLE',    'polished marble, white veins, luxury stone surface'],
+        ['GRANITE',   'grey granite, speckled, granite vein pattern'],
+        ['SANDSTONE', 'sandstone, warm layered sedimentary rock, ochre'],
+        ['OBSIDIAN',  'obsidian, volcanic glass, dark glossy black'],
+        ['COBBLE',    'cobblestone, irregular paving stones, mortar'],
+        ['SLATE',     'dark slate, layered metamorphic rock, flat'],
+        ['CONCRETE',  'raw concrete, grey, brutalist, rough texture'],
+        ['COAL',      'coal, charcoal, dark glossy mineral'],
+        ['GRAVEL',    'gravel, crushed stone aggregate, rough ground'],
+      ],
+    },
+    {
+      label: 'ORGANIC',
+      color: '#7DBF7D',
+      prompts: [
+        ['LEATHER',   'dark leather, stitched seams, worn tactile surface'],
+        ['VELVET',    'red velvet, deep plush fabric, luxury'],
+        ['DENIM',     'blue denim fabric, woven cloth, textile'],
+        ['SCALES',    'dragon scales, iridescent reptile armour'],
+        ['FUR',       'grey wolf fur, short dense animal pelt'],
+        ['TIGER FUR', 'tiger fur, orange and black stripes'],
+        ['MOSS',      'green moss, soft organic growth, damp surface'],
+        ['BARK MOSS', 'mossy bark, lichen covered tree bark'],
+      ],
+    },
+    {
+      label: 'GROUND',
+      color: '#A0784A',
+      prompts: [
+        ['SAND',      'desert sand, fine grain, warm ochre dunes'],
+        ['MUD',       'wet mud, clay, dark moist earth'],
+        ['SOIL',      'dark soil, earth, rich dirt ground'],
+        ['GRUNGE',    'grunge, dirty stained surface, grime layers'],
+      ],
+    },
+    {
+      label: 'SCI-FI',
+      color: '#39FF14',
+      prompts: [
+        ['MATRIX',    'dark circuit board, green neon traces, cyberpunk tech'],
+        ['CARBON',    'carbon fiber weave, matte black, modern composite'],
+        ['HOLOGRAM',  'holographic iridescent surface, diffraction rainbow'],
+        ['PLASMA',    'electric plasma energy field, glowing discharge'],
+        ['VOID',      'void abyss dark space, distant stars, cosmos'],
+        ['ALIEN',     'alien bioluminescent surface, organic sci-fi carapace'],
+        ['BIO-MECH',  'biomechanical alien surface, organic tech xenomorph'],
+      ],
+    },
+    {
+      label: 'SPECIAL',
+      color: '#00E5FF',
+      prompts: [
+        ['WATER',     'deep ocean water, caustics, ripples, blue'],
+        ['ICE',       'frozen ice, cracks and translucency, cold blue'],
+        ['SNOW',      'snow, white powdery surface, soft texture'],
+        ['FROST',     'frost crystal pattern, ice crystal, cold'],
+        ['DIAMOND',   'diamond facets, crystal gem, sparkle and dispersion'],
+        ['LAVA',      'lava flow, molten magma, glowing crust'],
+        ['CERAMIC',   'white ceramic tile, glazed porcelain, clean'],
+        ['TERRACOTTA','terracotta pottery, reddish clay, earthy'],
+      ],
+    },
+    {
+      label: 'SURFACE',
+      color: '#FF9F0A',
+      prompts: [
+        ['RUBBER',    'black rubber, matte tyre texture, grip pattern'],
+        ['PLASTIC',   'grey plastic, smooth resin, industrial'],
+        ['PAINT',     'red spray paint, graffiti, rough pigment'],
+        ['CHALK',     'chalk matte white paint, rough plaster surface'],
+        ['STUCCO',    'mediterranean stucco render, warm pink plaster'],
+        ['PLASTER',   'white plaster wall, rough render coat'],
+      ],
+    },
   ]
+
+  const [activeGroup, setActiveGroup] = React.useState(0)
 
   return (
     <div style={{ padding: 10 }}>
@@ -704,24 +864,58 @@ function TextureTab({ selected }) {
           placeholder="Describe the material surface…"
         />
 
-        {/* Quick prompt chips */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 6 }}>
-          {quickPrompts.map(([label, p]) => (
-            <button key={label} onClick={() => setPrompt(p)} style={{
-              padding: '2px 7px', fontSize: 8,
-              background: prompt === p ? 'rgba(57,255,20,0.12)' : 'var(--gf-bg-3)',
-              border: `1px solid ${prompt === p ? 'var(--gf-neon-dim)' : 'var(--gf-border-h)'}`,
-              borderRadius: 2,
-              color: prompt === p ? 'var(--gf-neon)' : 'var(--gf-text-3)',
-              cursor: 'pointer', fontFamily: 'monospace',
-              letterSpacing: '0.08em', textTransform: 'uppercase',
-              transition: 'all 0.1s',
-              boxShadow: prompt === p ? '0 0 5px #39FF1430' : 'none',
-              textShadow: prompt === p ? '0 0 4px var(--gf-neon)' : 'none',
-            }}>
-              {label}
-            </button>
-          ))}
+        {/* Quick prompt grouped tabs */}
+        <div style={{ marginTop: 7 }}>
+          {/* Category tabs */}
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 2, marginBottom: 5,
+          }}>
+            {quickPromptGroups.map((g, i) => (
+              <button
+                key={g.label}
+                onClick={() => setActiveGroup(i)}
+                style={{
+                  padding: '2px 7px', fontSize: 7,
+                  background: activeGroup === i
+                    ? `rgba(${g.color === '#39FF14' ? '57,255,20' : g.color === '#00E5FF' ? '0,229,255' : g.color === '#FF9F0A' ? '255,159,10' : g.color === '#C8A96E' ? '200,169,110' : g.color === '#A0A0A8' ? '160,160,168' : g.color === '#7DBF7D' ? '125,191,125' : '160,120,74'},0.18)`
+                    : 'transparent',
+                  border: `1px solid ${activeGroup === i ? g.color + '80' : 'var(--gf-border-h)'}`,
+                  borderRadius: 2,
+                  color: activeGroup === i ? g.color : 'var(--gf-text-4)',
+                  cursor: 'pointer', fontFamily: 'monospace',
+                  letterSpacing: '0.08em', textTransform: 'uppercase',
+                  transition: 'all 0.1s',
+                  textShadow: activeGroup === i ? `0 0 4px ${g.color}` : 'none',
+                }}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Chips for active group */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+            {quickPromptGroups[activeGroup].prompts.map(([label, p]) => {
+              const gc = quickPromptGroups[activeGroup].color
+              const active = prompt === p
+              return (
+                <button key={label} onClick={() => setPrompt(p)} style={{
+                  padding: '2px 7px', fontSize: 8,
+                  background: active ? `${gc}22` : 'var(--gf-bg-3)',
+                  border: `1px solid ${active ? gc + '80' : 'var(--gf-border-h)'}`,
+                  borderRadius: 2,
+                  color: active ? gc : 'var(--gf-text-3)',
+                  cursor: 'pointer', fontFamily: 'monospace',
+                  letterSpacing: '0.07em', textTransform: 'uppercase',
+                  transition: 'all 0.1s',
+                  boxShadow: active ? `0 0 5px ${gc}30` : 'none',
+                  textShadow: active ? `0 0 4px ${gc}` : 'none',
+                }}>
+                  {label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </Section>
 

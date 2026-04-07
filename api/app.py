@@ -93,7 +93,7 @@ def index():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "capabilities": [
             "uv", "texture", "mesh-info",
             "uv-bake",          # texture now UV-projected, not flat-tiled
@@ -102,6 +102,7 @@ def health():
             "dedup-verts",      # duplicate vertices removed pre-xatlas
             "uv-preserve",      # existing UVs reused when force_unwrap=false
             "multi-material",   # sub-meshes listed in metadata
+            "40-materials",     # 40+ procedural material presets
         ]
     })
 
@@ -319,6 +320,87 @@ def list_models():
 @app.route("/api/extensions")
 def list_extensions():
     return jsonify([])
+
+# ── Image-to-3D generation ────────────────────────────────────────────────────
+@app.route("/api/generate", methods=["POST"])
+def generate_mesh():
+    """
+    Image-to-3D mesh generation.
+    Requires a large AI model to be installed (Hunyuan3D, TripoSG, TRELLIS 2).
+    Returns a job ID that can be polled via /api/jobs/<id>.
+    """
+    model_id = request.form.get("model_id", "hunyuan3d-mini")
+
+    # Check if an image was provided
+    if "image" not in request.files:
+        return jsonify({"error": "No image file provided. Field name must be 'image'."}), 400
+
+    img_file = request.files["image"]
+    if not img_file.filename or not allowed(img_file.filename, ALLOWED_IMAGE):
+        return jsonify({
+            "error": f"Unsupported image format. Allowed: {sorted(ALLOWED_IMAGE)}"
+        }), 400
+
+    # Check if the requested model is installed
+    MODELS = {
+        "hunyuan3d-mini": {"name": "Hunyuan3D Mini",  "size_gb": 4.2},
+        "triposg":         {"name": "TripoSG",          "size_gb": 7.1},
+        "trellis2":        {"name": "TRELLIS 2",        "size_gb": 12.0},
+    }
+
+    if model_id not in MODELS:
+        return jsonify({"error": f"Unknown model '{model_id}'. Valid: {list(MODELS.keys())}"}), 400
+
+    model_info = MODELS[model_id]
+
+    # Try to import the model runner — will fail if not installed
+    try:
+        # These imports will raise ImportError if models are not downloaded
+        if model_id == "hunyuan3d-mini":
+            import hunyuan3d  # noqa
+        elif model_id == "triposg":
+            import triposg    # noqa
+        elif model_id == "trellis2":
+            import trellis    # noqa
+    except ImportError:
+        return jsonify({
+            "error": "MODEL_NOT_INSTALLED",
+            "model":  model_id,
+            "name":   model_info["name"],
+            "size_gb": model_info["size_gb"],
+            "message": (
+                f"{model_info['name']} ({model_info['size_gb']} GB) is not installed. "
+                f"This model requires a GPU and a large download. "
+                f"Install instructions: https://github.com/CrispyW0nton/Ghost-Tripo-API#models"
+            ),
+            "install_hint": f"pip install ghostforge-{model_id}"
+        }), 503
+
+    # If we get here the model is installed — save image and create job
+    job_id     = str(uuid.uuid4())
+    upload_dir = UPLOAD_DIR / job_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    img_name  = secure_filename(img_file.filename)
+    img_path  = str(upload_dir / img_name)
+    img_file.save(img_path)
+
+    with jobs_lock:
+        jobs[job_id] = {
+            "id":       job_id,
+            "status":   "queued",
+            "progress": 0,
+            "stage":    "Queued",
+            "type":     "generate",
+            "model":    model_id,
+            "result":   None,
+            "error":    None,
+        }
+
+    # (Real generation thread would go here once a model is installed)
+    logger.info(f"Generate job {job_id}: model={model_id} image={img_name}")
+    return jsonify({"job_id": job_id, "status": "queued"}), 202
+
 
 if __name__ == "__main__":
     logger.info("GhostForge API — starting on port 5000")
