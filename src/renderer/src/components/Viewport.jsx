@@ -1,7 +1,10 @@
 import React, { Suspense, useRef, useState, useEffect, useCallback } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
+import { OrbitControls, useGLTF, useProgress, Html } from '@react-three/drei'
 import * as THREE from 'three'
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
 import { useSceneStore, useSettingsStore } from '../store'
 import MatrixRain from './MatrixRain'
 
@@ -9,72 +12,278 @@ import MatrixRain from './MatrixRain'
 function MatrixGrid() {
   return (
     <>
-      {/* Primary grid — bright neon green lines */}
-      <gridHelper
-        args={[40, 40, '#39FF14', '#0D2A0D']}
-        position={[0, -0.001, 0]}
-      />
-      {/* Fine sub-grid — very dim */}
-      <gridHelper
-        args={[40, 160, '#061206', '#061206']}
-        position={[0, -0.002, 0]}
-      />
+      <gridHelper args={[40, 40, '#39FF14', '#0D2A0D']} position={[0, -0.001, 0]} />
+      <gridHelper args={[40, 160, '#061206', '#061206']} position={[0, -0.002, 0]} />
     </>
   )
 }
 
-// ─── Glowing XYZ axis lines ────────────────────────────────────────────────
+// ─── Glowing XYZ axis lines ───────────────────────────────────────────────────
 function NeonAxes() {
-  const axisData = [
-    { color: '#FF2D55', points: [-4, 0, 0, 4, 0, 0] },   // X — red/danger
-    { color: '#39FF14', points: [0, 0, 0, 0, 4, 0] },     // Y — neon green
-    { color: '#00E5FF', points: [0, 0, -4, 0, 0, 4] },    // Z — cyan
-  ]
   return (
     <group>
-      {axisData.map(({ color, points }, i) => (
+      {[
+        { color: '#FF2D55', pts: [-4,0,0, 4,0,0] },
+        { color: '#39FF14', pts: [0,0,0,  0,4,0] },
+        { color: '#00E5FF', pts: [0,0,-4, 0,0,4] },
+      ].map(({ color, pts }, i) => (
         <line key={i}>
           <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              args={[new Float32Array(points), 3]}
-            />
+            <bufferAttribute attach="attributes-position" args={[new Float32Array(pts), 3]} />
           </bufferGeometry>
-          <lineBasicMaterial color={color} linewidth={2} />
+          <lineBasicMaterial color={color} />
         </line>
       ))}
     </group>
   )
 }
 
-// ─── Animated neon wireframe placeholder ──────────────────────────────────────
+// ─── Loading spinner overlay (inside canvas) ─────────────────────────────────
+function ModelLoader() {
+  const { active, progress } = useProgress()
+  if (!active) return null
+  return (
+    <Html center>
+      <div style={{
+        color: '#39FF14', fontFamily: 'monospace', fontSize: 11,
+        textAlign: 'center', letterSpacing: '0.1em',
+        textShadow: '0 0 8px #39FF14',
+      }}>
+        <div style={{ marginBottom: 6 }}>LOADING MESH…</div>
+        <div style={{
+          width: 140, height: 2,
+          background: 'rgba(57,255,20,0.15)',
+          borderRadius: 1, overflow: 'hidden',
+        }}>
+          <div style={{
+            height: '100%', width: `${progress}%`,
+            background: 'linear-gradient(90deg, #00CC0A, #39FF14)',
+            boxShadow: '0 0 6px #39FF14',
+            transition: 'width 0.2s',
+          }} />
+        </div>
+        <div style={{ marginTop: 5, fontSize: 10, opacity: 0.6 }}>{Math.round(progress)}%</div>
+      </div>
+    </Html>
+  )
+}
+
+// ─── GLB / GLTF model component ───────────────────────────────────────────────
+function GltfModel({ url, onLoaded }) {
+  const { scene } = useGLTF(url)
+  const groupRef = useRef()
+
+  useEffect(() => {
+    if (!scene) return
+    // Apply neon-tinted emissive to all meshes so they look good in Matrix lighting
+    scene.traverse(child => {
+      if (child.isMesh) {
+        child.castShadow = true
+        child.receiveShadow = true
+        if (child.material) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material]
+          mats.forEach(mat => {
+            // Only tint if no existing texture
+            if (!mat.map) {
+              mat.emissive = new THREE.Color('#0A1A0A')
+              mat.emissiveIntensity = 0.08
+            }
+          })
+        }
+      }
+    })
+
+    // Auto-center & scale to fit viewport
+    const box = new THREE.Box3().setFromObject(scene)
+    const center = box.getCenter(new THREE.Vector3())
+    const size = box.getSize(new THREE.Vector3())
+    const maxDim = Math.max(size.x, size.y, size.z)
+    const scale = maxDim > 0 ? (3.0 / maxDim) : 1
+    scene.position.sub(center)
+
+    if (groupRef.current) {
+      groupRef.current.scale.setScalar(scale)
+    }
+
+    onLoaded?.({ vertices: 0, faces: 0 })
+  }, [scene])
+
+  return <group ref={groupRef}><primitive object={scene} /></group>
+}
+
+// ─── OBJ model component ──────────────────────────────────────────────────────
+function ObjModel({ file, onLoaded }) {
+  const [group, setGroup] = useState(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    const loader = new OBJLoader()
+    const url = URL.createObjectURL(file)
+
+    loader.load(url, (obj) => {
+      if (!mountedRef.current) return
+      URL.revokeObjectURL(url)
+
+      // Auto-center
+      const box = new THREE.Box3().setFromObject(obj)
+      const center = box.getCenter(new THREE.Vector3())
+      const size = box.getSize(new THREE.Vector3())
+      const maxDim = Math.max(size.x, size.y, size.z)
+      const scale = maxDim > 0 ? (3.0 / maxDim) : 1
+      obj.position.sub(center.multiplyScalar(scale))
+      obj.scale.setScalar(scale)
+
+      // Apply Matrix material
+      let vCount = 0, fCount = 0
+      obj.traverse(child => {
+        if (child.isMesh) {
+          vCount += child.geometry.attributes.position?.count || 0
+          fCount += (child.geometry.index ? child.geometry.index.count / 3 : 0)
+          child.material = new THREE.MeshStandardMaterial({
+            color: '#1A2A1A',
+            emissive: '#39FF14',
+            emissiveIntensity: 0.06,
+            roughness: 0.7,
+            metalness: 0.3,
+            wireframe: false,
+          })
+        }
+      })
+      setGroup(obj)
+      onLoaded?.({ vertices: vCount, faces: fCount })
+    })
+
+    return () => {
+      mountedRef.current = false
+    }
+  }, [file])
+
+  if (!group) return null
+  return <primitive object={group} />
+}
+
+// ─── STL model component ──────────────────────────────────────────────────────
+function StlModel({ file, onLoaded }) {
+  const [mesh, setMesh] = useState(null)
+
+  useEffect(() => {
+    const loader = new STLLoader()
+    const url = URL.createObjectURL(file)
+    loader.load(url, (geometry) => {
+      URL.revokeObjectURL(url)
+      geometry.computeVertexNormals()
+      const box = new THREE.Box3().setFromBufferAttribute(geometry.attributes.position)
+      const center = box.getCenter(new THREE.Vector3())
+      const size = box.getSize(new THREE.Vector3())
+      const maxDim = Math.max(size.x, size.y, size.z)
+      const scale = maxDim > 0 ? (3.0 / maxDim) : 1
+      geometry.translate(-center.x, -center.y, -center.z)
+      const mat = new THREE.MeshStandardMaterial({
+        color: '#0A1A0A', emissive: '#39FF14', emissiveIntensity: 0.08,
+        roughness: 0.6, metalness: 0.4,
+      })
+      const m = new THREE.Mesh(geometry, mat)
+      m.scale.setScalar(scale)
+      setMesh(m)
+      onLoaded?.({ vertices: geometry.attributes.position.count, faces: geometry.attributes.position.count / 3 })
+    })
+  }, [file])
+
+  if (!mesh) return null
+  return <primitive object={mesh} />
+}
+
+// ─── PLY model component ──────────────────────────────────────────────────────
+function PlyModel({ file, onLoaded }) {
+  const [mesh, setMesh] = useState(null)
+
+  useEffect(() => {
+    const loader = new PLYLoader()
+    const url = URL.createObjectURL(file)
+    loader.load(url, (geometry) => {
+      URL.revokeObjectURL(url)
+      geometry.computeVertexNormals()
+      const box = new THREE.Box3().setFromBufferAttribute(geometry.attributes.position)
+      const center = box.getCenter(new THREE.Vector3())
+      const size = box.getSize(new THREE.Vector3())
+      const maxDim = Math.max(size.x, size.y, size.z)
+      const scale = maxDim > 0 ? (3.0 / maxDim) : 1
+      geometry.translate(-center.x, -center.y, -center.z)
+      const mat = new THREE.MeshStandardMaterial({
+        color: '#0A1A0A', emissive: '#39FF14', emissiveIntensity: 0.08,
+        roughness: 0.6, metalness: 0.4, vertexColors: geometry.hasAttribute('color'),
+      })
+      const m = new THREE.Mesh(geometry, mat)
+      m.scale.setScalar(scale)
+      setMesh(m)
+      onLoaded?.({ vertices: geometry.attributes.position.count, faces: geometry.attributes.position.count / 3 })
+    })
+  }, [file])
+
+  if (!mesh) return null
+  return <primitive object={mesh} />
+}
+
+// ─── Universal scene object dispatcher ───────────────────────────────────────
 function SceneObject({ obj }) {
-  const meshRef = useRef()
+  const { updateObject } = useSceneStore()
   if (!obj.visible) return null
 
+  const handleLoaded = useCallback((stats) => {
+    if (stats && (stats.vertices || stats.faces)) {
+      updateObject(obj.id, { meshStats: stats })
+    }
+  }, [obj.id])
+
+  // If we have a previewUrl (from completed job), use GLB
+  if (obj.previewUrl) {
+    return (
+      <Suspense fallback={<ModelLoader />}>
+        <GltfModel url={obj.previewUrl} onLoaded={handleLoaded} />
+      </Suspense>
+    )
+  }
+
+  if (!obj.file) {
+    // Placeholder box
+    return (
+      <group>
+        <mesh>
+          <boxGeometry args={[1,1,1]} />
+          <meshStandardMaterial color="#0A1A0A" emissive="#39FF14" emissiveIntensity={0.08} roughness={0.7} metalness={0.4} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[1.003,1.003,1.003]} />
+          <meshBasicMaterial color="#39FF14" wireframe opacity={0.5} transparent />
+        </mesh>
+      </group>
+    )
+  }
+
+  const ext = obj.file.name?.split('.').pop().toLowerCase()
+
+  if (ext === 'glb' || ext === 'gltf') {
+    const url = URL.createObjectURL(obj.file)
+    return (
+      <Suspense fallback={<ModelLoader />}>
+        <GltfModel url={url} onLoaded={handleLoaded} />
+      </Suspense>
+    )
+  }
+  if (ext === 'obj') return <ObjModel file={obj.file} onLoaded={handleLoaded} />
+  if (ext === 'stl') return <StlModel file={obj.file} onLoaded={handleLoaded} />
+  if (ext === 'ply') return <PlyModel file={obj.file} onLoaded={handleLoaded} />
+
+  // Fallback
   return (
     <group>
-      {/* Solid mesh */}
-      <mesh ref={meshRef}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial
-          color="#0A1A0A"
-          emissive="#39FF14"
-          emissiveIntensity={0.08}
-          roughness={0.7}
-          metalness={0.4}
-        />
-      </mesh>
-      {/* Wireframe overlay — neon */}
-      <mesh>
-        <boxGeometry args={[1.002, 1.002, 1.002]} />
-        <meshBasicMaterial color="#39FF14" wireframe opacity={0.6} transparent />
-      </mesh>
+      <mesh><boxGeometry args={[1,1,1]} /><meshStandardMaterial color="#1A0A0A" emissive="#FF2D55" emissiveIntensity={0.1} /></mesh>
     </group>
   )
 }
 
-// ─── Empty scene prompt overlay ───────────────────────────────────────────────
+// ─── Empty scene overlay ──────────────────────────────────────────────────────
 function EmptySceneOverlay({ show }) {
   if (!show) return null
   return (
@@ -84,26 +293,21 @@ function EmptySceneOverlay({ show }) {
       alignItems: 'center', justifyContent: 'center',
       pointerEvents: 'none', gap: 18, zIndex: 5,
     }}>
-      {/* Ghost SVG — large, dim */}
-      <svg width="90" height="90" viewBox="0 0 32 32" fill="none" opacity={0.12}>
+      <svg width="88" height="88" viewBox="0 0 32 32" fill="none" opacity={0.1}>
         <path d="M4 30 L4 16 C4 8 9 3 16 3 C23 3 28 8 28 16 L28 30 L24 27 L20 30 L16 27 L12 30 L8 27 Z"
               fill="none" stroke="#39FF14" strokeWidth="0.5"/>
         <ellipse cx="12.5" cy="17" rx="2.4" ry="1.8" fill="#39FF14"/>
         <ellipse cx="19.5" cy="17" rx="2.4" ry="1.8" fill="#39FF14"/>
       </svg>
-
-      <div style={{
-        textAlign: 'center', lineHeight: 2.2,
-        fontFamily: 'monospace',
-      }}>
+      <div style={{ textAlign: 'center', lineHeight: 2.3, fontFamily: 'monospace' }}>
         {[
-          ['IMPORT_MODEL',   '// scene panel (left)'],
-          ['GENERATE_MESH',  '// GEN_3D tab → photo → mesh'],
-          ['ASK_GHOST_AI',   '// chat panel (right)'],
+          ['IMPORT_MODEL',   '// Scene panel → Import'],
+          ['GENERATE_MESH',  '// GEN_3D tab → photo'],
+          ['ASK_GHOST_AI',   '// Chat panel'],
         ].map(([cmd, hint]) => (
           <div key={cmd} style={{ fontSize: 10 }}>
             <span style={{ color: '#39FF1440' }}>&gt; </span>
-            <span style={{ color: '#39FF1450', letterSpacing: '0.12em' }}>{cmd}</span>
+            <span style={{ color: '#39FF1455', letterSpacing: '0.12em' }}>{cmd}</span>
             <span style={{ color: '#245924', marginLeft: 8, fontSize: 9 }}>{hint}</span>
           </div>
         ))}
@@ -117,9 +321,8 @@ function JobHUD({ job }) {
   if (!job || job.status === 'done') return null
   return (
     <div style={{
-      position: 'absolute', bottom: 16, left: '50%',
-      transform: 'translateX(-50%)',
-      background: 'rgba(1,3,1,0.93)',
+      position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+      background: 'rgba(1,3,1,0.94)',
       border: '1px solid var(--gf-neon-dim)',
       borderRadius: 'var(--gf-radius)',
       padding: '9px 16px',
@@ -127,44 +330,30 @@ function JobHUD({ job }) {
       boxShadow: '0 0 20px #39FF1422, 0 6px 24px rgba(0,0,0,0.7)',
       minWidth: 280, zIndex: 10,
     }}>
-      {/* Spinner */}
       <div className="animate-spin" style={{
         width: 14, height: 14, flexShrink: 0,
-        border: '2px solid rgba(57,255,20,0.15)',
-        borderTopColor: 'var(--gf-neon)',
-        borderRadius: '50%',
-        boxShadow: '0 0 6px var(--gf-neon)',
+        border: '2px solid rgba(57,255,20,0.15)', borderTopColor: 'var(--gf-neon)',
+        borderRadius: '50%', boxShadow: '0 0 6px var(--gf-neon)',
       }}/>
       <div style={{ flex: 1 }}>
-        {/* Stage label */}
         <div style={{
-          fontSize: 9, color: 'var(--gf-text-2)',
-          fontFamily: 'monospace', letterSpacing: '0.1em',
-          marginBottom: 5, textTransform: 'uppercase',
+          fontSize: 9, color: 'var(--gf-text-2)', fontFamily: 'monospace',
+          letterSpacing: '0.1em', marginBottom: 5, textTransform: 'uppercase',
         }}>
           <span style={{ color: 'var(--gf-neon)', marginRight: 4 }}>&gt;&gt;</span>
           {job.stage || 'PROCESSING'}
         </div>
-        {/* Progress bar */}
-        <div style={{
-          height: 2, background: 'rgba(57,255,20,0.1)',
-          borderRadius: 1, overflow: 'hidden',
-        }}>
+        <div style={{ height: 2, background: 'rgba(57,255,20,0.1)', borderRadius: 1, overflow: 'hidden' }}>
           <div style={{
-            height: '100%',
-            width: `${job.progress || 0}%`,
+            height: '100%', width: `${job.progress || 0}%`,
             background: 'linear-gradient(90deg, var(--gf-neon-dim), var(--gf-neon), var(--gf-neon-bright))',
-            boxShadow: '0 0 6px var(--gf-neon)',
-            borderRadius: 1,
-            transition: 'width 0.4s ease',
+            boxShadow: '0 0 6px var(--gf-neon)', borderRadius: 1, transition: 'width 0.4s ease',
           }}/>
         </div>
       </div>
       <span style={{
-        fontSize: 12, color: 'var(--gf-neon)',
-        fontFamily: 'monospace', fontWeight: 700,
-        textShadow: '0 0 8px var(--gf-neon)',
-        flexShrink: 0,
+        fontSize: 12, color: 'var(--gf-neon)', fontFamily: 'monospace', fontWeight: 700,
+        textShadow: '0 0 8px var(--gf-neon)', flexShrink: 0,
       }}>
         {job.progress || 0}%
       </span>
@@ -172,167 +361,110 @@ function JobHUD({ job }) {
   )
 }
 
-// ─── Camera preset HUD (top-right) ───────────────────────────────────────────
+// ─── Camera preset buttons (top right) ───────────────────────────────────────
 function CameraPresets({ orbitRef }) {
   const [active, setActive] = useState('PERSP')
   const { camera } = useThree()
-
   const presets = {
-    PERSP: { pos: [3, 2.5, 4],  up: [0, 1, 0] },
-    FRONT: { pos: [0, 0, 5],    up: [0, 1, 0] },
-    SIDE:  { pos: [5, 0, 0],    up: [0, 1, 0] },
-    TOP:   { pos: [0, 5, 0],    up: [0, 0, -1] },
+    PERSP: [3, 2.5, 4],
+    FRONT: [0, 0, 5],
+    SIDE:  [5, 0, 0],
+    TOP:   [0, 6, 0.001],
   }
-
   const goTo = (name) => {
     setActive(name)
-    const p = presets[name]
-    camera.position.set(...p.pos)
-    camera.up.set(...p.up)
-    if (orbitRef.current) {
-      orbitRef.current.target.set(0, 0, 0)
-      orbitRef.current.update()
-    }
+    camera.position.set(...presets[name])
+    orbitRef.current?.target.set(0, 0, 0)
+    orbitRef.current?.update()
   }
-
   return (
-    <div style={{
-      position: 'absolute', top: 10, right: 10, zIndex: 10,
-      display: 'flex', gap: 3,
-    }}>
-      {Object.keys(presets).map(name => (
-        <button key={name} onClick={() => goTo(name)} style={{
-          padding: '3px 8px', fontSize: 8,
-          fontFamily: 'monospace', letterSpacing: '0.1em',
-          background: active === name ? 'rgba(57,255,20,0.1)' : 'rgba(1,3,1,0.85)',
-          border: `1px solid ${active === name ? 'var(--gf-neon-dim)' : 'var(--gf-border)'}`,
-          borderRadius: 'var(--gf-radius-sm)',
-          color: active === name ? 'var(--gf-neon)' : 'var(--gf-text-3)',
-          cursor: 'pointer',
-          textShadow: active === name ? '0 0 5px var(--gf-neon)' : 'none',
-          boxShadow: active === name ? '0 0 8px #39FF1425' : 'none',
-          transition: 'all 0.1s',
-          backdropFilter: 'blur(4px)',
-        }}>
-          {name}
-        </button>
-      ))}
-    </div>
+    <Html style={{ position: 'absolute', top: 10, right: 10 }} prepend>
+      <div style={{ display: 'flex', gap: 3 }}>
+        {Object.keys(presets).map(name => (
+          <button key={name} onClick={() => goTo(name)} style={{
+            padding: '3px 8px', fontSize: 8, fontFamily: 'monospace', letterSpacing: '0.1em',
+            background: active === name ? 'rgba(57,255,20,0.1)' : 'rgba(1,3,1,0.85)',
+            border: `1px solid ${active === name ? '#00CC0A' : '#0C200C'}`,
+            borderRadius: 2,
+            color: active === name ? '#39FF14' : '#245924',
+            cursor: 'pointer', backdropFilter: 'blur(4px)',
+            textShadow: active === name ? '0 0 5px #39FF14' : 'none',
+            boxShadow: active === name ? '0 0 8px #39FF1425' : 'none',
+            transition: 'all 0.1s',
+          }}>{name}</button>
+        ))}
+      </div>
+    </Html>
   )
 }
 
-// ─── Camera orbit controls wrapper that exposes ref ───────────────────────────
-function Controls({ orbitRef }) {
-  return (
-    <OrbitControls
-      ref={orbitRef}
-      makeDefault
-      enableDamping
-      dampingFactor={0.05}
-      minDistance={0.3}
-      maxDistance={120}
-      screenSpacePanning={false}
-    />
-  )
-}
-
-// ─── View mode label (top-left HUD) ──────────────────────────────────────────
+// ─── View mode label (top left) ───────────────────────────────────────────────
 function ViewportHUD({ mode }) {
-  const labels = {
-    '3d':      'PERSPECTIVE_VIEW',
-    'uv':      'UV_EDITOR',
-    'texture': 'TEXTURE_PAINT',
-  }
+  const labels = { '3d': 'PERSPECTIVE_VIEW', 'uv': 'UV_EDITOR', 'texture': 'TEXTURE_PAINT' }
   return (
     <div style={{
       position: 'absolute', top: 10, left: 10, zIndex: 10,
       display: 'flex', alignItems: 'center', gap: 6,
-      background: 'rgba(1,3,1,0.85)',
-      border: '1px solid var(--gf-border)',
-      borderRadius: 'var(--gf-radius-sm)',
-      padding: '3px 9px',
-      backdropFilter: 'blur(4px)',
-      pointerEvents: 'none',
+      background: 'rgba(1,3,1,0.85)', border: '1px solid #0C200C',
+      borderRadius: 2, padding: '3px 9px',
+      backdropFilter: 'blur(4px)', pointerEvents: 'none',
     }}>
       <span style={{
         width: 5, height: 5, borderRadius: '50%',
-        background: 'var(--gf-neon)',
-        boxShadow: '0 0 5px var(--gf-neon)',
-        animation: 'pulse 3s ease infinite',
-        flexShrink: 0,
+        background: '#39FF14', boxShadow: '0 0 5px #39FF14',
+        animation: 'pulse 3s ease infinite', flexShrink: 0,
       }}/>
-      <span style={{
-        fontSize: 8, color: 'var(--gf-text-3)',
-        fontFamily: 'monospace', letterSpacing: '0.12em',
-        textTransform: 'uppercase',
-      }}>
-        {labels[mode] || 'UNKNOWN'}
+      <span style={{ fontSize: 8, color: '#245924', fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+        {labels[mode] || 'VIEWPORT'}
       </span>
     </div>
   )
 }
 
-// ─── Coordinate HUD (bottom-left) ────────────────────────────────────────────
+// ─── Live camera coordinate readout (bottom left) ────────────────────────────
 function CoordHUD() {
-  const [pos, setPos] = useState({ x: 0, y: 0, z: 0 })
+  const [pos, setPos] = useState([0, 0, 0])
   const { camera } = useThree()
-
-  useFrame(() => {
-    const p = camera.position
-    setPos({
-      x: p.x.toFixed(2),
-      y: p.y.toFixed(2),
-      z: p.z.toFixed(2),
-    })
-  })
-
+  useFrame(() => setPos([camera.position.x.toFixed(2), camera.position.y.toFixed(2), camera.position.z.toFixed(2)]))
   return (
-    <div style={{
-      position: 'absolute', bottom: 10, left: 10, zIndex: 10,
-      background: 'rgba(1,3,1,0.75)',
-      border: '1px solid var(--gf-border)',
-      borderRadius: 'var(--gf-radius-sm)',
-      padding: '3px 8px',
-      backdropFilter: 'blur(4px)',
-      pointerEvents: 'none',
-      fontFamily: 'monospace', fontSize: 8,
-      letterSpacing: '0.08em',
-    }}>
-      <span style={{ color: '#FF2D55' }}>X</span>
-      <span style={{ color: 'var(--gf-text-3)', margin: '0 3px' }}>{pos.x}</span>
-      <span style={{ color: '#39FF14' }}>Y</span>
-      <span style={{ color: 'var(--gf-text-3)', margin: '0 3px' }}>{pos.y}</span>
-      <span style={{ color: '#00E5FF' }}>Z</span>
-      <span style={{ color: 'var(--gf-text-3)', marginLeft: 3 }}>{pos.z}</span>
-    </div>
+    <Html style={{ position: 'absolute', bottom: 10, left: 10 }} prepend>
+      <div style={{
+        background: 'rgba(1,3,1,0.75)', border: '1px solid #0C200C', borderRadius: 2,
+        padding: '3px 8px', fontFamily: 'monospace', fontSize: 8, letterSpacing: '0.08em',
+        pointerEvents: 'none', whiteSpace: 'nowrap',
+      }}>
+        <span style={{ color: '#FF2D55' }}>X</span><span style={{ color: '#245924', margin: '0 4px' }}>{pos[0]}</span>
+        <span style={{ color: '#39FF14' }}>Y</span><span style={{ color: '#245924', margin: '0 4px' }}>{pos[1]}</span>
+        <span style={{ color: '#00E5FF' }}>Z</span><span style={{ color: '#245924', marginLeft: 4 }}>{pos[2]}</span>
+      </div>
+    </Html>
   )
 }
 
-// ─── Scene canvas content ─────────────────────────────────────────────────────
-function SceneContent({ objects, viewportGrid, orbitRef }) {
+// ─── Scene content (inside Canvas) ───────────────────────────────────────────
+function SceneContent({ objects, viewportGrid, viewportWireframe, orbitRef }) {
   return (
     <>
-      {/* Matrix-tinted lighting setup */}
-      <ambientLight intensity={0.25} color="#1A3B1A" />
-      <pointLight position={[0, 6, 0]}   intensity={1.4} color="#39FF14" distance={25} />
-      <pointLight position={[5, 3, 5]}   intensity={0.6} color="#00E5FF" distance={18} />
-      <pointLight position={[-5, -2, -5]} intensity={0.3} color="#39FF14" distance={12} />
+      <ambientLight intensity={0.3} color="#1A3B1A" />
+      <pointLight position={[0, 6, 0]}    intensity={1.5} color="#39FF14" distance={30} />
+      <pointLight position={[5, 3, 5]}    intensity={0.7} color="#00E5FF" distance={20} />
+      <pointLight position={[-5, -2, -5]} intensity={0.3} color="#39FF14" distance={15} />
 
-      {/* Neon green grid */}
       {viewportGrid && <MatrixGrid />}
-
-      {/* Axis helpers */}
       <NeonAxes />
 
-      {/* Scene objects */}
-      <Suspense fallback={null}>
+      <Suspense fallback={<ModelLoader />}>
         {objects.map(obj => <SceneObject key={obj.id} obj={obj} />)}
       </Suspense>
 
-      {/* Camera controls */}
-      <Controls orbitRef={orbitRef} />
-
-      {/* Coord display */}
+      <OrbitControls
+        ref={orbitRef}
+        makeDefault
+        enableDamping dampingFactor={0.05}
+        minDistance={0.1} maxDistance={200}
+        screenSpacePanning={false}
+      />
+      <CameraPresets orbitRef={orbitRef} />
       <CoordHUD />
     </>
   )
@@ -341,27 +473,17 @@ function SceneContent({ objects, viewportGrid, orbitRef }) {
 // ─── Main Viewport ────────────────────────────────────────────────────────────
 export default function Viewport() {
   const { objects, activeJob, viewportMode } = useSceneStore()
-  const { viewportGrid } = useSettingsStore()
+  const { viewportGrid, viewportWireframe } = useSettingsStore()
   const orbitRef = useRef()
   const isEmpty  = objects.length === 0
 
   return (
-    <div style={{
-      flex: 1, position: 'relative', overflow: 'hidden',
-      background: '#010301',
-    }}>
-      {/* Matrix rain — subtle, atmospheric */}
+    <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#010301' }}>
       <MatrixRain opacity={0.05} fontSize={12} speed={0.65} />
-
-      {/* View mode HUD — top left */}
       <ViewportHUD mode={viewportMode} />
 
-      {/* Three.js canvas */}
       <Canvas
-        style={{
-          position: 'absolute', inset: 0,
-          width: '100%', height: '100%', zIndex: 1,
-        }}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 1 }}
         camera={{ position: [3, 2.5, 4], fov: 45, near: 0.01, far: 2000 }}
         gl={{ antialias: true, alpha: true }}
         onCreated={({ gl }) => {
@@ -374,39 +496,24 @@ export default function Viewport() {
         <SceneContent
           objects={objects}
           viewportGrid={viewportGrid}
+          viewportWireframe={viewportWireframe}
           orbitRef={orbitRef}
         />
-
-        {/* Camera presets inside Canvas so useThree works */}
-        <CameraPresets orbitRef={orbitRef} />
       </Canvas>
 
-      {/* Empty overlay — above canvas */}
       <EmptySceneOverlay show={isEmpty} />
-
-      {/* Job progress HUD */}
       <JobHUD job={activeJob} />
 
-      {/* CRT vignette — edge darkening */}
+      {/* CRT vignette */}
       <div style={{
         position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none',
         background: 'radial-gradient(ellipse at center, transparent 45%, rgba(1,3,1,0.65) 100%)',
       }}/>
 
-      {/* Corner bracket decorations — Matrix aesthetic */}
-      {[
-        { top: 8, left: 8 },
-        { top: 8, right: 8 },
-        { bottom: 8, left: 8 },
-        { bottom: 8, right: 8 },
-      ].map((pos, i) => (
+      {/* Corner bracket decorations */}
+      {[[{top:8,left:8},0],[{top:8,right:8},90],[{bottom:8,right:8},180],[{bottom:8,left:8},270]].map(([pos,rot],i) => (
         <svg key={i} width="14" height="14" viewBox="0 0 14 14" fill="none"
-             style={{
-               position: 'absolute', zIndex: 3, pointerEvents: 'none',
-               opacity: 0.35,
-               transform: `rotate(${i * 90}deg)`,
-               ...pos,
-             }}>
+             style={{ position:'absolute', zIndex:3, pointerEvents:'none', opacity:0.3, transform:`rotate(${rot}deg)`, ...pos }}>
           <path d="M1 8 L1 1 L8 1" stroke="#39FF14" strokeWidth="1.2" fill="none"/>
         </svg>
       ))}

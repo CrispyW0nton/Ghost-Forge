@@ -1,6 +1,7 @@
-import React, { useRef } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import { useUIStore, useSceneStore } from '../store'
 import MatrixRain from './MatrixRain'
+import { getMeshInfo, generateMeshFromImage, listModels, pollJob } from '../modules/api'
 
 export default function LeftPanel() {
   const { activeLeftTab, setLeftTab } = useUIStore()
@@ -68,12 +69,34 @@ function SceneTab({ objects, selectedIds, selectObject, removeObject }) {
   const fileInputRef = useRef()
   const { addObject } = useSceneStore()
 
-  const handleImport = (e) => {
+  const handleImport = async (e) => {
     const file = e.target.files[0]
     if (!file) return
     const id = `obj_${Date.now()}`
-    addObject({ id, name: file.name.replace(/\.[^.]+$/, ''), type: 'mesh', file, visible: true, selected: false, uvDone: false, textureDone: false })
+    // Add object immediately with a loading flag for mesh stats
+    addObject({
+      id,
+      name: file.name.replace(/\.[^.]+$/, ''),
+      type: 'mesh',
+      file,
+      visible: true,
+      selected: false,
+      uvDone: false,
+      textureDone: false,
+      meshStats: { loading: true },
+    })
+    // Auto-select the newly imported object
+    useSceneStore.getState().selectObject(id)
     e.target.value = ''
+
+    // Fetch mesh stats from backend (non-blocking)
+    try {
+      const info = await getMeshInfo(file)
+      useSceneStore.getState().updateObject(id, { meshStats: info })
+    } catch (_) {
+      // Stats unavailable — clear the loading flag silently
+      useSceneStore.getState().updateObject(id, { meshStats: {} })
+    }
   }
 
   return (
@@ -245,56 +268,187 @@ function ToolBtn({ name, desc, icon, color }) {
 
 // ─── Generate Tab (Image → 3D) ────────────────────────────────────────────────
 function GenerateTab() {
-  const [imageFile, setImageFile] = React.useState(null)
-  const [preview, setPreview]     = React.useState(null)
+  const [imageFile, setImageFile] = useState(null)
+  const [preview, setPreview]     = useState(null)
+  const [selectedModel, setModel] = useState('hunyuan3d-mini')
+  const [models, setModels]       = useState([
+    { id: 'hunyuan3d-mini', name: 'HUNYUAN3D_MINI', installed: false, size_gb: 4.2 },
+    { id: 'triposg',        name: 'TRIPOSG',         installed: false, size_gb: 7.1 },
+    { id: 'trellis2',       name: 'TRELLIS_2',       installed: false, size_gb: 12.0 },
+  ])
+  const [running, setRunning]     = useState(false)
+  const [status, setStatus]       = useState(null)
+  const [error, setError]         = useState(null)
   const fileRef = useRef()
+  const { addObject } = useSceneStore()
+
+  // Fetch model install status from backend
+  useEffect(() => {
+    listModels()
+      .then(list => setModels(list))
+      .catch(() => {})
+  }, [])
+
+  const handleGenerate = async () => {
+    if (!imageFile) return
+    const installed = models.find(m => m.id === selectedModel)?.installed
+    if (!installed) {
+      setError(`MODEL_NOT_INSTALLED: ${selectedModel}. Install required.`)
+      return
+    }
+    setRunning(true)
+    setError(null)
+    setStatus('SUBMITTING_JOB…')
+    try {
+      const res = await generateMeshFromImage({ imageFile, modelId: selectedModel })
+      setStatus('JOB_QUEUED — polling…')
+      pollJob(
+        res.job_id,
+        (j) => setStatus(`${j.stage?.toUpperCase() || 'PROCESSING'} ${j.progress || 0}%`),
+        (j) => {
+          setRunning(false)
+          setStatus('MESH_READY')
+          // Add generated mesh to scene
+          const id = `gen_${Date.now()}`
+          const name = `gen_${selectedModel}_${id.slice(-4)}`
+          addObject({
+            id, name, type: 'mesh', file: null, visible: true,
+            selected: false, uvDone: false, textureDone: false,
+            previewUrl: `/api/jobs/${j.id}/preview/mesh_glb`,
+          })
+          useSceneStore.getState().selectObject(id)
+        },
+        (err) => {
+          setRunning(false)
+          setError(`ERR: ${err.message}`)
+          setStatus(null)
+        }
+      )
+    } catch (e) {
+      setRunning(false)
+      setError(`ERR: ${e.message}`)
+      setStatus(null)
+    }
+  }
 
   return (
     <div style={{ padding: 8 }}>
       <SectionHeader label="IMG_TO_3D" />
-      <p style={{ fontSize: 9, color: 'var(--gf-text-3)', padding: '0 2px 8px',
-                  lineHeight: 1.8, fontFamily: 'monospace', letterSpacing: '0.05em' }}>
+      <p style={{
+        fontSize: 9, color: 'var(--gf-text-3)', padding: '0 2px 8px',
+        lineHeight: 1.8, fontFamily: 'monospace', letterSpacing: '0.05em',
+      }}>
         // Generate mesh from any photo using<br/>// local AI — Hunyuan3D / TripoSG / TRELLIS
       </p>
 
+      {/* Image drop zone */}
       <div onClick={() => fileRef.current?.click()} style={{
         border: `1px dashed ${imageFile ? 'var(--gf-neon)' : 'var(--gf-border-h)'}`,
         borderRadius: 'var(--gf-radius)',
-        padding: 14, textAlign: 'center',
-        cursor: 'pointer',
+        padding: imageFile ? 4 : 14,
+        textAlign: 'center', cursor: 'pointer',
         background: imageFile ? 'rgba(57,255,20,0.04)' : 'var(--gf-bg-2)',
         boxShadow: imageFile ? '0 0 10px #39FF1418' : 'none',
         transition: 'all 0.15s', marginBottom: 8,
       }}>
         {preview
-          ? <img src={preview} style={{ width: '100%', borderRadius: 3, maxHeight: 110, objectFit: 'cover',
-                                        border: '1px solid var(--gf-neon-dim)' }} />
+          ? <img src={preview} style={{
+              width: '100%', borderRadius: 3, maxHeight: 120, objectFit: 'cover',
+              border: '1px solid var(--gf-neon-dim)',
+            }} alt="Reference" />
           : <>
               <div style={{ fontSize: 20, marginBottom: 4 }}>📷</div>
-              <div style={{ fontSize: 9, color: 'var(--gf-text-3)', fontFamily: 'monospace',
-                            letterSpacing: '0.08em' }}>SELECT_REFERENCE_IMAGE</div>
+              <div style={{
+                fontSize: 9, color: 'var(--gf-text-3)', fontFamily: 'monospace',
+                letterSpacing: '0.08em',
+              }}>SELECT_REFERENCE_IMAGE</div>
             </>
         }
       </div>
       <input ref={fileRef} type="file" accept="image/*" hidden
-             onChange={e => { const f = e.target.files[0]; if (f) { setImageFile(f); setPreview(URL.createObjectURL(f)) }}} />
+             onChange={e => {
+               const f = e.target.files[0]
+               if (f) { setImageFile(f); setPreview(URL.createObjectURL(f)); setError(null) }
+             }} />
 
-      <MatrixButton disabled={!imageFile} label="GENERATE_MESH" />
-
-      <div style={{ marginTop: 10 }}>
-        <SectionHeader label="AI_MODELS" />
-        {['HUNYUAN3D_MINI', 'TRIPOSG', 'TRELLIS_2'].map(m => (
-          <div key={m} style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '5px 6px', background: 'var(--gf-bg-2)',
-            border: '1px solid var(--gf-border)', borderRadius: 'var(--gf-radius-sm)',
-            marginBottom: 3, fontSize: 9, fontFamily: 'monospace',
-          }}>
-            <span style={{ color: 'var(--gf-text-2)', letterSpacing: '0.05em' }}>{m}</span>
-            <span style={{ color: 'var(--gf-text-4)', fontSize: 8 }}>NOT_INSTALLED</span>
+      {/* Model selector */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{
+          fontSize: 9, color: 'var(--gf-text-3)', fontFamily: 'monospace',
+          letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4,
+        }}>
+          <span style={{ color: 'var(--gf-neon-dim)' }}>// </span>SELECT_MODEL
+        </div>
+        {models.map(m => (
+          <div
+            key={m.id}
+            onClick={() => !running && setModel(m.id)}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '5px 8px', marginBottom: 3,
+              background: selectedModel === m.id ? 'rgba(57,255,20,0.07)' : 'var(--gf-bg-2)',
+              border: `1px solid ${selectedModel === m.id ? 'var(--gf-neon-dim)' : 'var(--gf-border)'}`,
+              borderRadius: 'var(--gf-radius-sm)',
+              cursor: running ? 'default' : 'pointer',
+              boxShadow: selectedModel === m.id ? '0 0 6px #39FF1418' : 'none',
+              transition: 'all 0.1s',
+            }}
+          >
+            <div>
+              <div style={{
+                fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.05em',
+                color: selectedModel === m.id ? 'var(--gf-neon)' : 'var(--gf-text-2)',
+                textShadow: selectedModel === m.id ? '0 0 5px var(--gf-neon)' : 'none',
+              }}>{m.name}</div>
+              <div style={{ fontSize: 8, color: 'var(--gf-text-4)', marginTop: 1 }}>
+                {m.size_gb}GB RAM
+              </div>
+            </div>
+            <span style={{
+              fontSize: 8, fontFamily: 'monospace', padding: '1px 5px',
+              borderRadius: 2,
+              background: m.installed ? 'rgba(57,255,20,0.1)' : 'transparent',
+              border: `1px solid ${m.installed ? 'var(--gf-neon-dim)' : 'var(--gf-border)'}`,
+              color: m.installed ? 'var(--gf-neon)' : 'var(--gf-text-4)',
+            }}>
+              {m.installed ? 'READY' : 'NOT_INSTALLED'}
+            </span>
           </div>
         ))}
       </div>
+
+      <MatrixButton
+        onClick={handleGenerate}
+        disabled={!imageFile || running}
+        loading={running}
+        label="GENERATE_MESH"
+      />
+
+      {/* Status / error display */}
+      {status && (
+        <div style={{
+          marginTop: 7, padding: '5px 8px',
+          background: 'rgba(57,255,20,0.04)',
+          border: '1px solid rgba(57,255,20,0.2)',
+          borderRadius: 'var(--gf-radius-sm)',
+          fontSize: 9, color: 'var(--gf-neon)',
+          fontFamily: 'monospace', letterSpacing: '0.08em',
+        }}>
+          &gt; {status}
+        </div>
+      )}
+      {error && (
+        <div style={{
+          marginTop: 7, padding: '5px 8px',
+          background: 'rgba(255,45,85,0.05)',
+          border: '1px solid rgba(255,45,85,0.25)',
+          borderRadius: 'var(--gf-radius-sm)',
+          fontSize: 9, color: 'var(--gf-danger)',
+          fontFamily: 'monospace', letterSpacing: '0.06em',
+        }}>
+          {error}
+        </div>
+      )}
     </div>
   )
 }

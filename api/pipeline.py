@@ -36,6 +36,7 @@ def run_pipeline(
     use_ai: bool = False,
     ai_steps: int = 20,
     output_format: str = "glb",
+    uv_only: bool = False,
     job_id: str = None,
     progress_callback=None,
 ) -> dict:
@@ -108,7 +109,36 @@ def run_pipeline(
     logger.info(f"UV layout saved to {uv_preview_path}")
 
     # -------------------------------------------------------------------------
-    # Stage 4: Generate texture
+    # Stage 4: UV-only mode — export unwrapped mesh without texture
+    # -------------------------------------------------------------------------
+    if uv_only:
+        progress("Exporting UV-unwrapped mesh (UV-only mode)", 80)
+        if output_format == "glb":
+            output_mesh_path = os.path.join(output_dir, f"{basename}_uv_unwrapped.glb")
+        else:
+            output_mesh_path = os.path.join(output_dir, f"{basename}_uv_unwrapped.obj")
+
+        uv_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+        uv_mesh.export(output_mesh_path)
+
+        t_end = time.time()
+        meta = {
+            "job_id": job_id, "input": input_mesh_path,
+            "prompt": texture_prompt, "texture_size": texture_size,
+            "uv_only": True,
+            "output_mesh": output_mesh_path, "texture_map": None,
+            "uv_layout": uv_preview_path,
+            "original_stats": original_stats, "uv_stats": uv_stats,
+            "processing_time_seconds": round(time.time() - t_start, 2),
+        }
+        meta_path = os.path.join(output_dir, f"{basename}_meta.json")
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        progress("Done!", 100)
+        return meta
+
+    # -------------------------------------------------------------------------
+    # Stage 4b: Generate texture
     # -------------------------------------------------------------------------
     progress(
         f"Generating texture ({'Stable Diffusion AI' if use_ai else 'procedural'} mode)",

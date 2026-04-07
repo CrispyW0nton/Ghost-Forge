@@ -1,6 +1,9 @@
 import React, { useState } from 'react'
 import { useUIStore, useSceneStore, useSettingsStore } from '../store'
-import { createUVTextureJob, pollJob, getPreviewUrl } from '../modules/api'
+import {
+  createUVTextureJob, pollJob,
+  getPreviewUrl, getDownloadUrl, getGlbPreviewUrl,
+} from '../modules/api'
 
 // ─── Shared sub-components ────────────────────────────────────────────────────
 
@@ -87,8 +90,10 @@ function FieldRow({ label, children }) {
   )
 }
 
-function MatrixActionBtn({ onClick, disabled, loading, label }) {
+function MatrixActionBtn({ onClick, disabled, loading, label, color }) {
   const [hover, setHover] = useState(false)
+  const c = color || 'var(--gf-neon)'
+  const cd = color || '#39FF14'
   return (
     <button
       onClick={onClick}
@@ -98,19 +103,19 @@ function MatrixActionBtn({ onClick, disabled, loading, label }) {
       style={{
         width: '100%', height: 32,
         background: disabled ? 'transparent'
-          : hover ? 'rgba(57,255,20,0.18)' : 'rgba(57,255,20,0.09)',
-        border: `1px solid ${disabled ? 'var(--gf-border)' : hover ? 'var(--gf-neon)' : 'var(--gf-neon-dim)'}`,
+          : hover ? `rgba(57,255,20,0.18)` : `rgba(57,255,20,0.09)`,
+        border: `1px solid ${disabled ? 'var(--gf-border)' : hover ? cd : 'var(--gf-neon-dim)'}`,
         borderRadius: 'var(--gf-radius-sm)',
-        color: disabled ? 'var(--gf-text-4)' : 'var(--gf-neon)',
+        color: disabled ? 'var(--gf-text-4)' : c,
         fontSize: 9, fontWeight: 700, fontFamily: 'monospace',
         letterSpacing: '0.15em', textTransform: 'uppercase',
         cursor: disabled ? 'not-allowed' : 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
         transition: 'all 0.1s',
         boxShadow: disabled ? 'none' : hover
-          ? '0 0 14px #39FF1440, inset 0 0 8px #39FF1408'
-          : '0 0 6px #39FF1420',
-        textShadow: disabled ? 'none' : '0 0 6px var(--gf-neon)',
+          ? `0 0 14px ${cd}40, inset 0 0 8px ${cd}08`
+          : `0 0 6px ${cd}20`,
+        textShadow: disabled ? 'none' : `0 0 6px ${c}`,
       }}
     >
       {loading && (
@@ -215,6 +220,101 @@ function Empty({ msg }) {
   )
 }
 
+// ─── Download button row ──────────────────────────────────────────────────────
+function DownloadBtn({ label, onClick, colorKey }) {
+  const [hover, setHover] = useState(false)
+  const colors = {
+    neon:  { base: '#39FF14', dim: 'rgba(57,255,20,0.12)' },
+    cyan:  { base: '#00E5FF', dim: 'rgba(0,229,255,0.12)' },
+    pink:  { base: '#FF2D55', dim: 'rgba(255,45,85,0.12)' },
+  }
+  const c = colors[colorKey] || colors.neon
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        flex: 1, height: 28,
+        background: hover ? c.dim : 'rgba(57,255,20,0.04)',
+        border: `1px solid ${hover ? c.base : 'var(--gf-border-h)'}`,
+        borderRadius: 'var(--gf-radius-sm)',
+        color: hover ? c.base : 'var(--gf-text-2)',
+        fontSize: 8, fontFamily: 'monospace',
+        letterSpacing: '0.1em', textTransform: 'uppercase',
+        cursor: 'pointer',
+        transition: 'all 0.12s',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+        textShadow: hover ? `0 0 5px ${c.base}` : 'none',
+        boxShadow: hover ? `0 0 8px ${c.base}40` : 'none',
+      }}
+    >
+      <span style={{ fontSize: 10 }}>↓</span>
+      {label}
+    </button>
+  )
+}
+
+// ─── Job complete — outputs panel ─────────────────────────────────────────────
+function JobOutputPanel({ jobId, hasTexture }) {
+  const triggerDownload = (url, filename) => {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
+  return (
+    <div style={{
+      marginTop: 10,
+      background: 'rgba(57,255,20,0.03)',
+      border: '1px solid rgba(57,255,20,0.2)',
+      borderRadius: 'var(--gf-radius-sm)',
+      padding: '8px 9px',
+      boxShadow: '0 0 12px rgba(57,255,20,0.08)',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        marginBottom: 7, fontSize: 9,
+        fontFamily: 'monospace', letterSpacing: '0.1em',
+      }}>
+        <span style={{
+          display: 'inline-block', width: 6, height: 6,
+          borderRadius: '50%', background: '#39FF14',
+          boxShadow: '0 0 6px #39FF14', flexShrink: 0,
+        }}/>
+        <span style={{ color: 'var(--gf-neon)', textTransform: 'uppercase' }}>JOB_COMPLETE</span>
+        <span style={{ color: 'var(--gf-text-4)', marginLeft: 'auto' }}>{jobId?.slice(0, 8)}…</span>
+      </div>
+
+      {/* Download buttons */}
+      <div style={{ display: 'flex', gap: 4 }}>
+        <DownloadBtn
+          label="MESH.GLB"
+          colorKey="neon"
+          onClick={() => triggerDownload(getDownloadUrl(jobId, 'mesh'), 'ghostforge_mesh.glb')}
+        />
+        {hasTexture && (
+          <DownloadBtn
+            label="TEX.PNG"
+            colorKey="cyan"
+            onClick={() => triggerDownload(getDownloadUrl(jobId, 'texture'), 'ghostforge_texture.png')}
+          />
+        )}
+        <DownloadBtn
+          label="UV.PNG"
+          colorKey="pink"
+          onClick={() => triggerDownload(getDownloadUrl(jobId, 'uv_layout'), 'ghostforge_uv_layout.png')}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ─── Tab button ───────────────────────────────────────────────────────────────
 function TabBtn({ label, active, onClick }) {
   return (
@@ -278,6 +378,8 @@ export default function RightPanel() {
 function PropertiesTab({ selected }) {
   if (!selected) return <Empty msg="Select an object to view properties" />
 
+  const stats = selected.meshStats || {}
+
   return (
     <div style={{ padding: 10 }}>
       <Section label="OBJECT_INFO">
@@ -294,6 +396,56 @@ function PropertiesTab({ selected }) {
           valueColor={selected.textureDone ? 'var(--gf-cyan)' : 'var(--gf-text-3)'}
         />
       </Section>
+
+      {/* Mesh Stats — shown once available from backend /api/mesh-info */}
+      {(stats.vertices != null || stats.loading) && (
+        <Section label="MESH_STATS">
+          {stats.loading ? (
+            <div style={{
+              fontSize: 9, color: 'var(--gf-text-3)', fontFamily: 'monospace',
+              letterSpacing: '0.08em', padding: '4px 0',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <div className="animate-spin" style={{
+                width: 8, height: 8, border: '1.5px solid rgba(57,255,20,0.2)',
+                borderTopColor: 'var(--gf-neon)', borderRadius: '50%',
+              }}/>
+              PARSING MESH…
+            </div>
+          ) : (
+            <>
+              <PropRow
+                label="VERTICES"
+                value={stats.vertices?.toLocaleString() ?? '—'}
+                valueColor="var(--gf-neon)"
+              />
+              <PropRow
+                label="FACES"
+                value={stats.faces?.toLocaleString() ?? '—'}
+                valueColor="var(--gf-text-2)"
+              />
+              {stats.edges != null && (
+                <PropRow label="EDGES" value={stats.edges?.toLocaleString() ?? '—'} />
+              )}
+              <PropRow
+                label="WATERTIGHT"
+                value={stats.watertight ? '✓ YES' : '✗ NO'}
+                valueColor={stats.watertight ? 'var(--gf-neon)' : 'var(--gf-text-3)'}
+              />
+              {stats.size && (
+                <PropRow
+                  label="DIMENSIONS"
+                  value={stats.size.map(v => v.toFixed(2)).join(' × ')}
+                  valueColor="var(--gf-text-2)"
+                />
+              )}
+              {stats.format && (
+                <PropRow label="FORMAT" value={stats.format.toUpperCase()} />
+              )}
+            </>
+          )}
+        </Section>
+      )}
 
       <Section label="TRANSFORM">
         <Vec3Row label="POSITION" values={[0, 0, 0]} />
@@ -313,6 +465,13 @@ function PropertiesTab({ selected }) {
           &gt; UV_ATLAS: READY — switch to UV tab
         </div>
       )}
+
+      {/* Download outputs when job is done */}
+      {selected.jobId && selected.uvDone && (
+        <div style={{ marginTop: 10 }}>
+          <JobOutputPanel jobId={selected.jobId} hasTexture={selected.textureDone} />
+        </div>
+      )}
     </div>
   )
 }
@@ -324,6 +483,7 @@ function UVTab({ selected }) {
   const [running, setRunning]     = useState(false)
   const [progress, setProgress]   = useState(null)
   const [uvPreview, setUvPreview] = useState(null)
+  const [doneJobId, setDoneJobId] = useState(null)
   const { updateObject, setActiveJob, clearActiveJob } = useSceneStore()
 
   if (!selected) return <Empty msg="Select an object to unwrap UVs" />
@@ -331,6 +491,8 @@ function UVTab({ selected }) {
   const handleUnwrap = async () => {
     if (!selected.file) return
     setRunning(true)
+    setDoneJobId(null)
+    setUvPreview(null)
     setProgress({ stage: 'INITIALISING', progress: 0 })
 
     try {
@@ -339,6 +501,7 @@ function UVTab({ selected }) {
         prompt: 'placeholder',
         textureSize: atlasSize,
         outputFormat: 'glb',
+        uvOnly: true,
       })
       setActiveJob({ id: job.job_id, type: 'UV_UNWRAP', status: 'running', progress: 0, stage: 'STARTING' })
 
@@ -346,9 +509,17 @@ function UVTab({ selected }) {
         job.job_id,
         (j) => { setProgress(j); setActiveJob({ id: j.id, type: 'UV_UNWRAP', ...j }) },
         (j) => {
-          setRunning(false); setProgress(j); clearActiveJob()
+          setRunning(false)
+          setProgress(j)
+          clearActiveJob()
+          setDoneJobId(j.id)
           setUvPreview(getPreviewUrl(j.id, 'uv_layout'))
-          updateObject(selected.id, { uvDone: true, jobId: j.id })
+          // Auto-load the output GLB in the viewport
+          updateObject(selected.id, {
+            uvDone: true,
+            jobId: j.id,
+            previewUrl: getGlbPreviewUrl(j.id),
+          })
         },
         (err) => {
           setRunning(false)
@@ -382,6 +553,7 @@ function UVTab({ selected }) {
         </FieldRow>
       </Section>
 
+      {/* Algorithm info */}
       <div style={{
         padding: '6px 8px', marginBottom: 10,
         background: 'rgba(0,229,255,0.04)',
@@ -420,6 +592,11 @@ function UVTab({ selected }) {
               <img src={uvPreview} style={{ width: '100%', display: 'block' }} alt="UV Layout" />
             </div>
           </Section>
+
+          {/* Download row */}
+          {doneJobId && (
+            <JobOutputPanel jobId={doneJobId} hasTexture={false} />
+          )}
         </div>
       )}
     </div>
@@ -436,6 +613,7 @@ function TextureTab({ selected }) {
   const [progress, setProgress]     = useState(null)
   const [texPreview, setTexPreview] = useState(null)
   const [refFile, setRefFile]       = useState(null)
+  const [doneJobId, setDoneJobId]   = useState(null)
   const refInput = React.useRef()
   const { updateObject, setActiveJob, clearActiveJob } = useSceneStore()
 
@@ -444,6 +622,8 @@ function TextureTab({ selected }) {
   const handleGenerate = async () => {
     if (!selected.file) return
     setRunning(true)
+    setDoneJobId(null)
+    setTexPreview(null)
     setProgress({ stage: 'INITIALISING', progress: 0 })
 
     try {
@@ -462,11 +642,25 @@ function TextureTab({ selected }) {
         job.job_id,
         (j) => { setProgress(j); setActiveJob({ id: j.id, type: 'TEX_GEN', ...j }) },
         (j) => {
-          setRunning(false); setProgress(j); clearActiveJob()
+          setRunning(false)
+          setProgress(j)
+          clearActiveJob()
+          setDoneJobId(j.id)
           setTexPreview(getPreviewUrl(j.id, 'texture'))
-          updateObject(selected.id, { textureDone: true, texturePrompt: prompt, jobId: j.id })
+          // Auto-load textured GLB in viewport
+          updateObject(selected.id, {
+            uvDone: true,
+            textureDone: true,
+            texturePrompt: prompt,
+            jobId: j.id,
+            previewUrl: getGlbPreviewUrl(j.id),
+          })
         },
-        (err) => { setRunning(false); setProgress({ stage: `ERR: ${err.message}`, progress: 0 }); clearActiveJob() }
+        (err) => {
+          setRunning(false)
+          setProgress({ stage: `ERR: ${err.message}`, progress: 0 })
+          clearActiveJob()
+        }
       )
     } catch (e) {
       setRunning(false)
@@ -475,14 +669,16 @@ function TextureTab({ selected }) {
   }
 
   const quickPrompts = [
-    ['RUST', 'rusted iron, oxidised, worn metal'],
-    ['MARBLE', 'polished marble, white veins, luxury'],
-    ['WOOD', 'aged oak wood grain, natural'],
-    ['CONCRETE', 'raw concrete, grey, brutalist'],
-    ['LEATHER', 'dark leather, stitched, worn'],
-    ['GOLD', 'polished gold, metallic, reflective'],
-    ['MATRIX', 'dark circuit board, green neon, cyberpunk'],
-    ['STONE', 'ancient stone, cracked, mossy'],
+    ['RUST',     'rusted iron, oxidised, worn metal, surface corrosion'],
+    ['MARBLE',   'polished marble, white veins, luxury stone surface'],
+    ['WOOD',     'aged oak wood grain, natural knots, warm tones'],
+    ['CONCRETE', 'raw concrete, grey, brutalist, rough texture'],
+    ['LEATHER',  'dark leather, stitched seams, worn, tactile'],
+    ['GOLD',     'polished gold, metallic, highly reflective'],
+    ['MATRIX',   'dark circuit board, green neon traces, cyberpunk tech'],
+    ['STONE',    'ancient stone, weathered, cracked, mossy'],
+    ['CARBON',   'carbon fiber weave, matte black, modern composite'],
+    ['SAND',     'desert sand, fine grain, warm ochre tones'],
   ]
 
   return (
@@ -503,6 +699,7 @@ function TextureTab({ selected }) {
             resize: 'vertical', minHeight: 52,
             fontFamily: 'monospace',
             lineHeight: 1.5,
+            boxSizing: 'border-box',
           }}
           placeholder="Describe the material surface…"
         />
@@ -552,9 +749,9 @@ function TextureTab({ selected }) {
       <Section label="SETTINGS">
         <FieldRow label="TEXTURE_SIZE">
           <select value={texSize} onChange={e => setTexSize(+e.target.value)} style={matrixSelect}>
-            <option value={512}>512</option>
-            <option value={1024}>1024</option>
-            <option value={2048}>2048</option>
+            <option value={512}>512 px</option>
+            <option value={1024}>1024 px</option>
+            <option value={2048}>2048 px</option>
           </select>
         </FieldRow>
 
@@ -617,6 +814,11 @@ function TextureTab({ selected }) {
               // {prompt}
             </div>
           </Section>
+
+          {/* Download outputs */}
+          {doneJobId && (
+            <JobOutputPanel jobId={doneJobId} hasTexture={true} />
+          )}
         </div>
       )}
     </div>
