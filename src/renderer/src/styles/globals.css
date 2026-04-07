@@ -1,121 +1,462 @@
-/* ─── GhostForge Global Styles ─────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   GhostForge — The Matrix Ghost Theme
+   Palette: neon green #39FF14, deep black, cyan accents, magenta glitch
+   Inspired by Ghost's profile — hooded cyber figure, neon green eyes
+   ═══════════════════════════════════════════════════════════════ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  /* Brand */
-  --gf-ghost:       #c8c8ff;
-  --gf-forge:       #ff6b2b;
-  --gf-forge-dim:   #cc4a0e;
+  /* ── Primary neon greens ── */
+  --gf-neon:        #39FF14;   /* PRIMARY — eye glow, highlights */
+  --gf-neon-dim:    #00CC0A;   /* dim neon for secondary */
+  --gf-neon-bright: #7CFF3A;   /* brightest highlight */
+  --gf-neon-glow:   #2CFF2C;   /* bloom color */
+  --gf-neon-dark:   #0A8A00;   /* dark neon for subtle use */
 
-  /* Backgrounds — layered dark */
-  --gf-bg-base:     #0a0a0f;
-  --gf-bg-1:        #0f0f18;
-  --gf-bg-2:        #141420;
-  --gf-bg-3:        #1a1a2a;
-  --gf-bg-4:        #1f1f32;
+  /* ── Cyan / teal accents ── */
+  --gf-cyan:        #00E5FF;
+  --gf-cyan-dim:    #00B7D9;
+  --gf-cyan-dark:   #004455;
 
-  /* Borders */
-  --gf-border:      #252538;
-  --gf-border-h:    #32324e;
-  --gf-border-a:    #ff6b2b55;
+  /* ── Danger / glitch magenta ── */
+  --gf-magenta:     #FF2D55;
+  --gf-danger:      #FF2D55;
+  --gf-warn:        #FFB800;
+  --gf-success:     #39FF14;
+  --gf-info:        #00E5FF;
 
-  /* Text */
-  --gf-text:        #e8e8f0;
-  --gf-text-2:      #9090b8;
-  --gf-text-3:      #55557a;
-  --gf-text-4:      #33334a;
+  /* ── Background layers — deep black with green cast ── */
+  --gf-bg-base:     #010301;   /* almost pure black */
+  --gf-bg-0:        #020402;   /* viewport bg */
+  --gf-bg-1:        #040804;   /* panel bg */
+  --gf-bg-2:        #070D07;   /* card bg */
+  --gf-bg-3:        #0A120A;   /* elevated surface */
+  --gf-bg-4:        #0F1A0F;   /* hover state */
+  --gf-bg-5:        #141F14;   /* selected state */
 
-  /* Semantic */
-  --gf-success:     #22c55e;
-  --gf-warn:        #f59e0b;
-  --gf-danger:      #ef4444;
-  --gf-info:        #6366f1;
+  /* ── Borders ── */
+  --gf-border:      #0C200C;   /* subtle border */
+  --gf-border-h:    #163016;   /* hover border */
+  --gf-border-a:    #39FF1455; /* active — neon glow */
+  --gf-border-glow: #39FF1422; /* panel glow edge */
 
-  /* Accent gradients */
-  --gf-grad-forge:  linear-gradient(135deg, #ff6b2b, #ff9a5c);
-  --gf-grad-ghost:  linear-gradient(135deg, #6366f1, #c8c8ff);
-  --gf-grad-brand:  linear-gradient(135deg, #ff6b2b 0%, #6366f1 100%);
+  /* ── Text ── */
+  --gf-text:        #B8FFB8;   /* primary — soft matrix green */
+  --gf-text-2:      #5FBF5F;   /* secondary */
+  --gf-text-3:      #245924;   /* muted */
+  --gf-text-4:      #133013;   /* very muted */
+  --gf-text-code:   #39FF14;   /* code / data — full neon */
 
-  /* Spacing & radius */
-  --gf-radius:      8px;
-  --gf-radius-lg:   12px;
-  --gf-radius-sm:   4px;
+  /* ── Brand (all neon green — no orange) ── */
+  --gf-ghost:       #39FF14;
+  --gf-forge:       #39FF14;   /* OVERRIDDEN: was orange, now neon */
+  --gf-forge-dim:   #00CC0A;
+  --gf-ghost-eye:   #39FF14;
 
-  /* Transitions */
-  --gf-transition:  0.15s ease;
+  /* ── Gradients ── */
+  --gf-grad-neon:    linear-gradient(135deg, #39FF14, #00E5FF);
+  --gf-grad-matrix:  linear-gradient(180deg, #010301 0%, #040804 100%);
+  --gf-grad-glow:    radial-gradient(ellipse at center, #39FF1415 0%, transparent 70%);
+  --gf-grad-scanline: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 0, 0.012) 2px,
+    rgba(0, 255, 0, 0.012) 4px
+  );
+  --gf-grad-button:  linear-gradient(135deg, rgba(57,255,20,0.12), rgba(0,229,255,0.04));
+  --gf-grad-header:  linear-gradient(90deg, #39FF1408 0%, transparent 50%);
 
-  /* Panel sizes */
+  /* ── Glow shadows ── */
+  --gf-shadow-neon:  0 0 6px #39FF1466, 0 0 16px #39FF1433, 0 0 40px #39FF1411;
+  --gf-shadow-neon-sm: 0 0 4px #39FF1488, 0 0 10px #39FF1444;
+  --gf-shadow-panel: 0 0 0 1px #39FF1415, 0 0 24px #39FF1406;
+  --gf-shadow-eye:   0 0 12px #39FF14, 0 0 30px #39FF1488, 0 0 60px #39FF1433;
+  --gf-shadow-inset: inset 0 0 20px #39FF1406;
+
+  /* ── Layout dimensions ── */
   --titlebar-h:     38px;
-  --toolbar-h:      44px;
-  --statusbar-h:    24px;
+  --toolbar-h:      42px;
+  --statusbar-h:    22px;
   --left-panel-w:   240px;
-  --right-panel-w:  300px;
-  --chat-panel-w:   340px;
+  --right-panel-w:  290px;
+  --chat-panel-w:   320px;
+
+  /* ── Spacing ── */
+  --gf-radius:      5px;
+  --gf-radius-lg:   9px;
+  --gf-radius-sm:   2px;
+  --gf-transition:  0.1s ease;
 }
 
+/* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body, #root {
-  height: 100%;
-  width: 100%;
+  height: 100%; width: 100%;
   overflow: hidden;
   background: var(--gf-bg-base);
   color: var(--gf-text);
-  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  font-size: 13px;
+  font-family: 'Courier New', 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--gf-border-h); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--gf-text-3); }
+/* ── Persistent scanline overlay across entire app ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: var(--gf-grad-scanline);
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.7;
+}
 
-/* Allow text selection inside these */
-input, textarea, .selectable { user-select: text; }
+/* ── CRT vignette on entire app ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center,
+    transparent 55%,
+    rgba(0, 0, 0, 0.35) 100%
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
 
-/* Focus rings */
+/* ── Global scrollbar — matrix green ── */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: var(--gf-bg-1); }
+::-webkit-scrollbar-thumb {
+  background: var(--gf-neon-dark);
+  border-radius: 2px;
+  box-shadow: 0 0 4px var(--gf-neon-dark);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gf-neon-dim);
+  box-shadow: 0 0 6px var(--gf-neon);
+}
+
+/* ── Input elements ── */
+input, textarea, select {
+  user-select: text;
+  caret-color: var(--gf-neon);
+  background: var(--gf-bg-3);
+  border: 1px solid var(--gf-border-h);
+  color: var(--gf-text);
+  font-family: 'Courier New', monospace;
+  border-radius: var(--gf-radius-sm);
+}
+input::selection, textarea::selection {
+  background: #39FF1430;
+  color: var(--gf-neon);
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--gf-neon-dim);
+  box-shadow: 0 0 0 1px #39FF1430, 0 0 8px #39FF1420;
+}
+option {
+  background: var(--gf-bg-3);
+  color: var(--gf-text);
+}
+
+/* ── Focus rings ── */
 :focus-visible {
-  outline: 2px solid var(--gf-forge);
-  outline-offset: 2px;
+  outline: 1px solid var(--gf-neon-dim);
+  outline-offset: 1px;
+  box-shadow: var(--gf-shadow-neon-sm);
 }
 
-/* Utility: drag region for custom titlebar */
+/* ── Electron drag regions ── */
 .drag-region { -webkit-app-region: drag; }
-.no-drag { -webkit-app-region: no-drag; }
+.no-drag     { -webkit-app-region: no-drag; }
 
-/* Animations */
-@keyframes fadeIn   { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@keyframes spin     { to { transform: rotate(360deg); } }
-@keyframes pulse    { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-@keyframes shimmer  {
-  0%   { background-position: -400px 0; }
-  100% { background-position: 400px 0; }
+/* ══════════════════════════════════════════════
+   KEYFRAME ANIMATIONS
+   ══════════════════════════════════════════════ */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
 }
 
-.animate-fadeIn  { animation: fadeIn 0.2s ease; }
-.animate-spin    { animation: spin 1s linear infinite; }
-.animate-pulse   { animation: pulse 2s ease infinite; }
-
-/* Ghost glow effect */
-.ghost-glow {
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.15), 0 0 40px rgba(99, 102, 241, 0.05);
-}
-.forge-glow {
-  box-shadow: 0 0 20px rgba(255, 107, 43, 0.2), 0 0 40px rgba(255, 107, 43, 0.08);
+@keyframes matrixPulse {
+  0%   { text-shadow: 0 0 4px var(--gf-neon); }
+  50%  { text-shadow: 0 0 14px var(--gf-neon), 0 0 28px var(--gf-neon-glow), 0 0 40px #39FF1444; }
+  100% { text-shadow: 0 0 4px var(--gf-neon); }
 }
 
-/* Panel resize handle */
+@keyframes glitch {
+  0%   { clip-path: inset(0 0 98% 0); transform: translateX(-3px); }
+  10%  { clip-path: inset(20% 0 60% 0); transform: translateX(3px); }
+  20%  { clip-path: inset(50% 0 30% 0); transform: translateX(-2px); }
+  30%  { clip-path: inset(80% 0 5% 0);  transform: translateX(2px); }
+  40%  { clip-path: inset(0 0 0 0);     transform: translateX(0); }
+  100% { clip-path: inset(0 0 0 0);     transform: translateX(0); }
+}
+
+@keyframes neonFlicker {
+  0%,  94%, 100% { opacity: 1; }
+  95% { opacity: 0.7; }
+  96% { opacity: 1; }
+  97% { opacity: 0.5; }
+  98% { opacity: 0.9; }
+  99% { opacity: 0.6; }
+}
+
+@keyframes scanDown {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(100vh); }
+}
+
+@keyframes eyeGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px #39FF14) drop-shadow(0 0 10px #39FF14);
+  }
+  50% {
+    filter: drop-shadow(0 0 10px #39FF14) drop-shadow(0 0 24px #39FF14) drop-shadow(0 0 48px #2CFF2C);
+  }
+}
+
+@keyframes terminalBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+@keyframes borderPulse {
+  0%, 100% { border-color: var(--gf-border-h); box-shadow: none; }
+  50%       { border-color: var(--gf-neon-dim); box-shadow: 0 0 6px #39FF1430; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(20px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes neonPing {
+  0%   { transform: scale(1);   opacity: 1; }
+  75%  { transform: scale(1.8); opacity: 0; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* ══════════════════════════════════════════════
+   UTILITY CLASSES
+   ══════════════════════════════════════════════ */
+
+.animate-fadeIn      { animation: fadeIn 0.2s ease; }
+.animate-slideRight  { animation: slideInRight 0.2s ease; }
+.animate-spin        { animation: spin 1s linear infinite; }
+.animate-pulse       { animation: pulse 2s ease infinite; }
+.animate-matrix      { animation: matrixPulse 3s ease infinite; }
+.animate-flicker     { animation: neonFlicker 5s ease infinite; }
+.animate-eye-glow    { animation: eyeGlow 2s ease-in-out infinite; }
+
+/* ── Neon text glow ── */
+.neon-text {
+  color: var(--gf-neon);
+  text-shadow: 0 0 6px var(--gf-neon), 0 0 14px var(--gf-neon-glow);
+}
+
+/* ── Neon border ── */
+.neon-border {
+  border-color: var(--gf-neon-dim) !important;
+  box-shadow: 0 0 6px #39FF1444, inset 0 0 8px #39FF1408;
+}
+
+/* ── Panel glow shadow ── */
+.neon-glow {
+  box-shadow: var(--gf-shadow-neon);
+}
+
+/* ── Matrix chip / tag ── */
+.gf-chip {
+  background: var(--gf-bg-3);
+  border: 1px solid var(--gf-border-h);
+  border-radius: var(--gf-radius-sm);
+  color: var(--gf-text-3);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all var(--gf-transition);
+  font-family: inherit;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.gf-chip:hover {
+  border-color: var(--gf-neon-dim);
+  color: var(--gf-neon);
+  box-shadow: 0 0 6px #39FF1433;
+  text-shadow: 0 0 6px var(--gf-neon);
+}
+
+/* ── Panel resize handle ── */
 .resize-handle {
-  width: 4px;
-  background: transparent;
+  width: 3px;
+  background: var(--gf-border);
   cursor: col-resize;
   transition: background var(--gf-transition);
   flex-shrink: 0;
 }
-.resize-handle:hover { background: var(--gf-forge); }
+.resize-handle:hover {
+  background: var(--gf-neon);
+  box-shadow: 0 0 8px var(--gf-neon);
+}
+
+/* ── Matrix code rain canvas ── */
+.matrix-rain-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Terminal cursor ── */
+.terminal-cursor::after {
+  content: '█';
+  color: var(--gf-neon);
+  animation: terminalBlink 1s step-end infinite;
+  margin-left: 1px;
+  font-size: 0.9em;
+  text-shadow: 0 0 6px var(--gf-neon);
+}
+
+/* ── Section / panel header divider ── */
+.gf-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--gf-text-3);
+  font-family: monospace;
+  border-bottom: 1px solid var(--gf-border);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+/* ── Matrix action button (global) ── */
+.gf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  background: rgba(57, 255, 20, 0.08);
+  border: 1px solid var(--gf-neon-dim);
+  border-radius: var(--gf-radius-sm);
+  color: var(--gf-neon);
+  font-size: 9px;
+  font-weight: 700;
+  font-family: monospace;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all var(--gf-transition);
+  text-shadow: 0 0 6px var(--gf-neon);
+  box-shadow: 0 0 6px #39FF1418;
+}
+.gf-btn:hover {
+  background: rgba(57, 255, 20, 0.18);
+  box-shadow: 0 0 14px #39FF1440, inset 0 0 8px #39FF1408;
+}
+.gf-btn:disabled {
+  background: transparent;
+  border-color: var(--gf-border);
+  color: var(--gf-text-4);
+  box-shadow: none;
+  text-shadow: none;
+  cursor: not-allowed;
+}
+
+/* ── Range inputs ── */
+input[type="range"] {
+  appearance: none;
+  background: var(--gf-bg-3);
+  border: 1px solid var(--gf-border-h);
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--gf-neon);
+  box-shadow: 0 0 6px var(--gf-neon);
+  cursor: pointer;
+  border: 1px solid var(--gf-bg-base);
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 10px var(--gf-neon), 0 0 20px #39FF1444;
+}
+
+/* ── Progress bar (shared component) ── */
+.gf-progress-track {
+  height: 3px;
+  background: var(--gf-bg-3);
+  border: 1px solid var(--gf-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.gf-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gf-neon-dim), var(--gf-neon), var(--gf-neon-bright));
+  box-shadow: 0 0 6px var(--gf-neon), 0 0 12px #39FF1444;
+  border-radius: 2px;
+  transition: width 0.35s ease;
+}
+
+/* ── Toggle switch ── */
+.gf-toggle {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.gf-toggle[data-on="true"] {
+  background: rgba(57, 255, 20, 0.15);
+  border: 1px solid var(--gf-neon-dim);
+  box-shadow: 0 0 8px #39FF1430;
+}
+.gf-toggle[data-on="false"] {
+  background: var(--gf-bg-3);
+  border: 1px solid var(--gf-border-h);
+}
+.gf-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  transition: left 0.2s;
+}
+.gf-toggle[data-on="true"] .gf-toggle-thumb {
+  left: 18px;
+  background: var(--gf-neon);
+  box-shadow: 0 0 6px var(--gf-neon);
+}
+.gf-toggle[data-on="false"] .gf-toggle-thumb {
+  left: 2px;
+  background: var(--gf-text-3);
+}
