@@ -1,0 +1,89 @@
+{
+  "name": "ghostforge",
+  "version": "0.1.0",
+  "description": "GhostForge — Open source 3D creation suite with integrated AI partnership",
+  "main": "./out/main/index.js",
+  "author": "Ghost",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "npm run build && electron-builder",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@electron-toolkit/utils": "^4.0.0",
+    "@react-three/drei": "^9.120.0",
+    "@react-three/fiber": "^8.17.10",
+    "@xyflow/react": "^12.10.2",
+    "axios": "^1.7.9",
+    "electron-updater": "^6.8.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
+    "three": "^0.171.0",
+    "three-mesh-bvh": "^0.9.9",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.171.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "cross-env": "^10.1.0",
+    "electron": "^33.3.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "eslint": "^9.17.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.0"
+  },
+  "build": {
+    "appId": "com.ghostforge.app",
+    "productName": "GhostForge",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "api",
+        "to": "api",
+        "filter": [
+          "**/*",
+          "!.venv/**/*",
+          "!__pycache__/**/*"
+        ]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "ghost",
+      "repo": "ghostforge"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "win": {
+      "target": "nsis",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "icon": "resources/icons/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "resources/icons/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "resources/icons/icon.png"
+    }
+  }
+}

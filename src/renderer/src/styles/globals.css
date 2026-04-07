@@ -1,0 +1,121 @@
+/* ─── GhostForge Global Styles ─────────────────────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand */
+  --gf-ghost:       #c8c8ff;
+  --gf-forge:       #ff6b2b;
+  --gf-forge-dim:   #cc4a0e;
+
+  /* Backgrounds — layered dark */
+  --gf-bg-base:     #0a0a0f;
+  --gf-bg-1:        #0f0f18;
+  --gf-bg-2:        #141420;
+  --gf-bg-3:        #1a1a2a;
+  --gf-bg-4:        #1f1f32;
+
+  /* Borders */
+  --gf-border:      #252538;
+  --gf-border-h:    #32324e;
+  --gf-border-a:    #ff6b2b55;
+
+  /* Text */
+  --gf-text:        #e8e8f0;
+  --gf-text-2:      #9090b8;
+  --gf-text-3:      #55557a;
+  --gf-text-4:      #33334a;
+
+  /* Semantic */
+  --gf-success:     #22c55e;
+  --gf-warn:        #f59e0b;
+  --gf-danger:      #ef4444;
+  --gf-info:        #6366f1;
+
+  /* Accent gradients */
+  --gf-grad-forge:  linear-gradient(135deg, #ff6b2b, #ff9a5c);
+  --gf-grad-ghost:  linear-gradient(135deg, #6366f1, #c8c8ff);
+  --gf-grad-brand:  linear-gradient(135deg, #ff6b2b 0%, #6366f1 100%);
+
+  /* Spacing & radius */
+  --gf-radius:      8px;
+  --gf-radius-lg:   12px;
+  --gf-radius-sm:   4px;
+
+  /* Transitions */
+  --gf-transition:  0.15s ease;
+
+  /* Panel sizes */
+  --titlebar-h:     38px;
+  --toolbar-h:      44px;
+  --statusbar-h:    24px;
+  --left-panel-w:   240px;
+  --right-panel-w:  300px;
+  --chat-panel-w:   340px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--gf-bg-base);
+  color: var(--gf-text);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gf-border-h); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gf-text-3); }
+
+/* Allow text selection inside these */
+input, textarea, .selectable { user-select: text; }
+
+/* Focus rings */
+:focus-visible {
+  outline: 2px solid var(--gf-forge);
+  outline-offset: 2px;
+}
+
+/* Utility: drag region for custom titlebar */
+.drag-region { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+/* Animations */
+@keyframes fadeIn   { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes spin     { to { transform: rotate(360deg); } }
+@keyframes pulse    { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes shimmer  {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.animate-fadeIn  { animation: fadeIn 0.2s ease; }
+.animate-spin    { animation: spin 1s linear infinite; }
+.animate-pulse   { animation: pulse 2s ease infinite; }
+
+/* Ghost glow effect */
+.ghost-glow {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.15), 0 0 40px rgba(99, 102, 241, 0.05);
+}
+.forge-glow {
+  box-shadow: 0 0 20px rgba(255, 107, 43, 0.2), 0 0 40px rgba(255, 107, 43, 0.08);
+}
+
+/* Panel resize handle */
+.resize-handle {
+  width: 4px;
+  background: transparent;
+  cursor: col-resize;
+  transition: background var(--gf-transition);
+  flex-shrink: 0;
+}
+.resize-handle:hover { background: var(--gf-forge); }
