@@ -61,7 +61,7 @@ def make_cb(job_id):
 
 # ── Background worker ─────────────────────────────────────────────────────────
 def run_job(job_id, mesh_path, ref_path, prompt,
-            tex_size, use_ai, ai_steps, out_fmt, uv_only):
+            tex_size, use_ai, ai_steps, out_fmt, uv_only, force_unwrap):
     try:
         update_job(job_id, status="running", progress=0, stage="Starting")
         result = run_pipeline(
@@ -74,6 +74,7 @@ def run_job(job_id, mesh_path, ref_path, prompt,
             ai_steps=ai_steps,
             output_format=out_fmt,
             uv_only=uv_only,
+            force_unwrap=force_unwrap,
             job_id=job_id,
             progress_callback=make_cb(job_id),
         )
@@ -90,7 +91,19 @@ def index():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "version": "1.1.0", "capabilities": ["uv", "texture", "mesh-info"]})
+    return jsonify({
+        "status": "ok",
+        "version": "1.3.0",
+        "capabilities": [
+            "uv", "texture", "mesh-info",
+            "uv-bake",          # texture now UV-projected, not flat-tiled
+            "crash-isolation",  # xatlas runs in subprocess
+            "auto-decimate",    # meshes >100k faces auto-decimated
+            "dedup-verts",      # duplicate vertices removed pre-xatlas
+            "uv-preserve",      # existing UVs reused when force_unwrap=false
+            "multi-material",   # sub-meshes listed in metadata
+        ]
+    })
 
 # ── Mesh info (fast preview of stats without full pipeline) ───────────────────
 @app.route("/api/mesh-info", methods=["POST"])
@@ -169,7 +182,8 @@ def create_job():
     use_ai      = request.form.get("use_ai",  "false").lower() in ("1", "true", "yes")
     ai_steps    = int(request.form.get("ai_steps", 20))
     out_fmt     = request.form.get("output_format", "glb").lower()
-    uv_only     = request.form.get("uv_only", "false").lower() in ("1", "true", "yes")
+    uv_only      = request.form.get("uv_only",      "false").lower() in ("1", "true", "yes")
+    force_unwrap = request.form.get("force_unwrap", "false").lower() in ("1", "true", "yes")
 
     job_id      = str(uuid.uuid4())
     upload_dir  = UPLOAD_DIR / job_id
@@ -196,6 +210,7 @@ def create_job():
             "prompt":        prompt,
             "mesh_filename": mesh_name,
             "uv_only":       uv_only,
+            "force_unwrap":  force_unwrap,
             "result":        None,
             "error":         None,
         }
@@ -203,11 +218,11 @@ def create_job():
     threading.Thread(
         target=run_job,
         args=(job_id, mesh_path, ref_path, prompt,
-              tex_size, use_ai, ai_steps, out_fmt, uv_only),
+              tex_size, use_ai, ai_steps, out_fmt, uv_only, force_unwrap),
         daemon=True,
     ).start()
 
-    logger.info(f"Job {job_id}: '{prompt}' | AI={use_ai} | UV_ONLY={uv_only} | size={tex_size}")
+    logger.info(f"Job {job_id}: '{prompt}' | AI={use_ai} | UV_ONLY={uv_only} | FORCE_UNWRAP={force_unwrap} | size={tex_size}")
     return jsonify({"job_id": job_id, "status": "queued"}), 202
 
 # ── Get / list jobs ───────────────────────────────────────────────────────────
