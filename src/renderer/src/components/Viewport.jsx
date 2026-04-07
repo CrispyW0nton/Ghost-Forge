@@ -71,21 +71,27 @@ function ModelLoader() {
 // ─── GLB / GLTF model component ───────────────────────────────────────────────
 function GltfModel({ url, onLoaded }) {
   const { scene } = useGLTF(url)
-  const groupRef = useRef()
+  const groupRef  = useRef()
+  const fitted    = useRef(false)
 
   useEffect(() => {
-    if (!scene) return
-    // Apply neon-tinted emissive to all meshes so they look good in Matrix lighting
+    if (!scene || fitted.current) return
+    fitted.current = true
+
+    // Count verts/faces + apply Matrix lighting tint
+    let verts = 0, faces = 0
     scene.traverse(child => {
       if (child.isMesh) {
-        child.castShadow = true
+        child.castShadow    = true
         child.receiveShadow = true
+        verts += child.geometry.attributes.position?.count || 0
+        faces += child.geometry.index ? child.geometry.index.count / 3
+                                      : (child.geometry.attributes.position?.count || 0) / 3
         if (child.material) {
           const mats = Array.isArray(child.material) ? child.material : [child.material]
           mats.forEach(mat => {
-            // Only tint if no existing texture
             if (!mat.map) {
-              mat.emissive = new THREE.Color('#0A1A0A')
+              mat.emissive          = new THREE.Color('#0A1A0A')
               mat.emissiveIntensity = 0.08
             }
           })
@@ -94,21 +100,36 @@ function GltfModel({ url, onLoaded }) {
     })
 
     // Auto-center & scale to fit viewport
-    const box = new THREE.Box3().setFromObject(scene)
+    const box    = new THREE.Box3().setFromObject(scene)
     const center = box.getCenter(new THREE.Vector3())
-    const size = box.getSize(new THREE.Vector3())
+    const size   = box.getSize(new THREE.Vector3())
     const maxDim = Math.max(size.x, size.y, size.z)
-    const scale = maxDim > 0 ? (3.0 / maxDim) : 1
+    const scale  = maxDim > 0 ? (3.0 / maxDim) : 1
     scene.position.sub(center)
+    if (groupRef.current) groupRef.current.scale.setScalar(scale)
 
-    if (groupRef.current) {
-      groupRef.current.scale.setScalar(scale)
-    }
-
-    onLoaded?.({ vertices: 0, faces: 0 })
+    onLoaded?.({ vertices: Math.round(verts), faces: Math.round(faces) })
   }, [scene])
 
   return <group ref={groupRef}><primitive object={scene} /></group>
+}
+
+// ─── GLB from a File object — stable blob URL, revoked on unmount ─────────────
+function GltfModelFromFile({ file, onLoaded }) {
+  const [url, setUrl] = useState(null)
+
+  useEffect(() => {
+    const blobUrl = URL.createObjectURL(file)
+    setUrl(blobUrl)
+    return () => URL.revokeObjectURL(blobUrl)
+  }, [file])
+
+  if (!url) return null
+  return (
+    <Suspense fallback={<ModelLoader />}>
+      <GltfModel url={url} onLoaded={onLoaded} />
+    </Suspense>
+  )
 }
 
 // ─── OBJ model component ──────────────────────────────────────────────────────
@@ -264,11 +285,9 @@ function SceneObject({ obj }) {
   const ext = obj.file.name?.split('.').pop().toLowerCase()
 
   if (ext === 'glb' || ext === 'gltf') {
-    const url = URL.createObjectURL(obj.file)
+    // Use a stable memoised blob URL — revoked when component unmounts
     return (
-      <Suspense fallback={<ModelLoader />}>
-        <GltfModel url={url} onLoaded={handleLoaded} />
-      </Suspense>
+      <GltfModelFromFile file={obj.file} onLoaded={handleLoaded} />
     )
   }
   if (ext === 'obj') return <ObjModel file={obj.file} onLoaded={handleLoaded} />
@@ -454,7 +473,10 @@ function SceneContent({ objects, viewportGrid, viewportWireframe, orbitRef }) {
       <NeonAxes />
 
       <Suspense fallback={<ModelLoader />}>
-        {objects.map(obj => <SceneObject key={obj.id} obj={obj} />)}
+        {objects.map(obj => (
+          // key includes previewUrl so Three.js re-mounts fully when job completes
+          <SceneObject key={`${obj.id}_${obj.previewUrl || 'raw'}`} obj={obj} />
+        ))}
       </Suspense>
 
       <OrbitControls
