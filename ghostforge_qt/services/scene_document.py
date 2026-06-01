@@ -101,6 +101,7 @@ def _record_to_dict(record: SceneObjectRecord) -> dict[str, Any]:
         "transform": _transform_to_dict(record.transform),
         "operations": list(record.operations),
         "operation_graph": _graph_to_dict(record.operation_graph),
+        "operation_graph_history": [dict(item) for item in record.operation_graph_history],
     }
 
 
@@ -120,6 +121,7 @@ def _record_from_dict(payload: dict[str, Any]) -> SceneObjectRecord:
         transform=_transform_from_dict(payload.get("transform") or {}),
         operations=tuple(str(item) for item in payload.get("operations") or ()),
         operation_graph=_graph_from_dict(payload.get("operation_graph")),
+        operation_graph_history=_graph_history_from_payload(payload.get("operation_graph_history")),
     )
 
 
@@ -135,6 +137,16 @@ def _graph_from_dict(payload: Any) -> EditGraph | None:
     if not isinstance(payload, dict):
         raise ValueError("operation_graph must be an object")
     return EditGraph.model_validate(payload)
+
+
+def _graph_history_from_payload(payload: Any) -> tuple[dict[str, object], ...]:
+    if not isinstance(payload, list):
+        return ()
+    history: list[dict[str, object]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            history.append(dict(item))
+    return tuple(history)
 
 
 def _transform_to_dict(transform: TransformState) -> dict[str, list[float]]:

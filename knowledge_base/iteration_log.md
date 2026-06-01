@@ -417,3 +417,173 @@ Verification so far:
 
 - Focused Qt graph completion tests: 12 passed.
 - Full project verification after README/roadmap updates: 569 passed, 3 skipped.
+
+## 2026-06-01 Descriptor-Driven Graph Params Slice
+
+Replaced the hard-coded prompt/reference/worker controls in the Qt graph panel
+with a schema-driven parameter form backed by operation descriptors.
+
+Book/roadmap principles applied:
+
+- Qt model/view panels should render typed data and collect intent without
+  duplicating core operation logic.
+- Operation descriptors are the shared contract for core evaluation, MCP
+  discovery, and desktop graph editing.
+- Growing toward a DCC modifier stack requires editable node parameters that
+  survive graph persistence and remain independent of KOTOR or provider-specific
+  assumptions.
+
+Added:
+
+- `OperationParameterForm` for descriptor-rendered string, path, int, float,
+  bool, enum, vector, scalar/vector, JSON object, and worker-choice parameters.
+- `OperationGraphModel.update_node_params` for immutable node-param edits that
+  invalidate stale evaluation status.
+- Graph panel add/edit wiring so selected operation descriptors create nodes
+  with typed params and selected graph nodes can update their params.
+- Focused Qt tests for descriptor parsing, add-node params, edit-node params,
+  and required-parameter validation.
+
+Verification so far:
+
+- Focused operation graph parameter tests: 8 passed.
+- Full project verification: 572 passed, 3 skipped.
+
+## 2026-06-01 Graph Job Lifecycle UI Slice
+
+Made queued graph evaluation visible and interruptible in the Qt graph panel.
+
+Book/roadmap principles applied:
+
+- Long-running jobs should show progress, cancellation, logs/state, and terminal
+  outcomes outside the UI thread.
+- Durable core job handles are the shared boundary for Qt and MCP; the graph UI
+  should mirror those handles instead of inventing local-only state.
+- A DCC-class modifier graph needs honest failure and retry affordances before
+  hosted AI, retopo, and texture workers become routine.
+
+Added:
+
+- Operation-graph job strip with active job id, progress bar, stage/message,
+  cancel button, terminal failed/cancelled/succeeded state, and retry control.
+- Main-window wiring from `JobController.jobsChanged` into graph job progress,
+  terminal completion, failure, cancellation, and cancel requests.
+- Focused tests proving graph progress display, cancel signal emission,
+  terminal retry state, success status display, and cancel routing.
+
+Verification so far:
+
+- Focused graph panel/MainWindow lifecycle tests: 13 passed.
+- Full project verification: 574 passed, 3 skipped.
+
+## 2026-06-01 Graph Result Badge Slice
+
+Added per-node graph result affordances so evaluation reports are easier to act
+on inside the Qt modifier graph.
+
+Book/roadmap principles applied:
+
+- Graph evaluation side effects are resource metadata, not incidental UI text.
+- Model/view tables should expose artifact and manifest state through roles,
+  display columns, and tooltips so future inspector/actions can reuse them.
+- Failed graph evaluations should move the editor's attention to the failed
+  node instead of making the artist hunt through logs.
+
+Added:
+
+- Operation graph columns for artifact badges and manifest/audit-ready badges.
+- Per-node artifact paths, manifest paths, and tooltips derived from
+  `EvaluationResult.metadata['side_effects']`.
+- Failed-node focus when graph evaluation returns failed node steps.
+- Focused tests for model badge roles/tooltips and panel failed-node focus.
+
+Verification so far:
+
+- Focused graph result badge tests: 20 passed.
+- Full project verification: 576 passed, 3 skipped.
+
+## 2026-06-01 Graph Audit And History Slice
+
+Extended the graph result surface from one-shot badges into audit-aware result
+history.
+
+Book/roadmap principles applied:
+
+- Manifest validation and audit history are the authoritative readiness signal;
+  UI badges should read from manifest/evaluation payloads.
+- Result history belongs in a model/view table so future graph inspectors, MCP
+  resources, and persistence can reuse the same row contract.
+- The operation graph should show enough recent evaluation context for an
+  artist or agent to compare runs without searching job logs.
+
+Added:
+
+- `OperationGraphHistoryModel` with graph id, status, output path, artifact
+  count, audit badge, and message columns.
+- Manifest/audit badge extraction from `manifest.validation.status` and latest
+  `manifest.custom['audit_history']` entry when present.
+- Graph panel result-history table populated from evaluation payloads.
+- Focused tests for audit badge extraction, history rows, and panel history
+  updates.
+
+Verification so far:
+
+- Focused graph audit/history tests: 22 passed.
+- Full project verification: 578 passed, 3 skipped.
+
+## 2026-06-01 Graph-Linked Audit Action Slice
+
+Connected the graph result surface to the core audit pipeline instead of leaving
+audit badges as passive manifest display.
+
+Book/roadmap principles applied:
+
+- Audit readiness must be persisted through manifests, not computed as local UI
+  state.
+- Qt should submit long-running validation work as durable core jobs and then
+  re-read the manifest to refresh the visible result.
+- The graph panel is becoming a production modifier stack surface: evaluate,
+  inspect, audit, retry, and follow provenance from the same UI.
+
+Added:
+
+- `CoreBridge.submit_audit_asset` wrapper over the shared `audit_asset` job.
+- Graph-panel audit action, audit job status text, and manifest refresh hook.
+- Main-window audit job context tracking, progress/terminal wiring, and
+  manifest re-read after successful audit.
+- Focused tests for bridge submission, panel audit request/refresh, and a full
+  graph-evaluate-then-audit Qt flow that persists audit history.
+
+Verification so far:
+
+- Focused graph-linked audit tests: 20 passed.
+- Full project verification: 580 passed, 3 skipped.
+
+## 2026-06-01 Graph History Persistence Slice
+
+Persisted operation-graph result history as part of the Qt scene document
+contract.
+
+Book/roadmap principles applied:
+
+- Qt model/view data should survive save/open when it represents document
+  state, not just widget chrome.
+- Game-engine resource pipelines need repeatable provenance and validation
+  context attached to the asset across sessions.
+- A DCC-class modifier graph should restore its last evaluation and audit
+  context when an artist reopens a project.
+
+Added:
+
+- Per-object `operation_graph_history` on scene records.
+- `.gforge` write/read support for graph result history payloads.
+- Main-window storage of graph history after evaluation, graph edits, and
+  graph-linked audit refresh.
+- Operation-graph panel/model payload round-tripping for restored history rows.
+- Focused tests for scene document, graph panel, and main-window save/open
+  restoration of history and audit badges.
+
+Verification so far:
+
+- Focused Qt persistence tests: 37 passed.
+- Full project verification: 581 passed, 3 skipped.

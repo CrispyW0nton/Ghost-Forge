@@ -55,3 +55,12 @@ def test_core_bridge_submits_authoring_graph_evaluation_job(tmp_path):
     assert handle.kind == "evaluate_edit_graph"
     assert handle.status.value == "pending"
     assert bridge.context.graphs.load("qt_job_graph").nodes[0].kind == "recenter"
+
+
+def test_core_bridge_submits_audit_asset_job(tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path, dispatch_jobs=False))
+
+    handle = bridge.submit_audit_asset(tmp_path / "asset", run_gltf_validator=False)
+
+    assert handle.kind == "audit_asset"
+    assert handle.status.value == "pending"

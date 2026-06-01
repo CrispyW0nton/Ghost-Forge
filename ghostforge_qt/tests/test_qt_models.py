@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6 import QtCore
+
 from ghostforge_core.authoring import EvaluationResult, EvaluationStep
 from ghostforge_core.types import MeshInfo
-from ghostforge_qt.models.operation_graph_model import OperationGraphModel, OperationPaletteModel
+from ghostforge_qt.models.operation_graph_model import (
+    OperationGraphHistoryModel,
+    OperationGraphModel,
+    OperationPaletteModel,
+)
 from ghostforge_qt.models.scene_model import SceneTableModel, TransformState
 from ghostforge_qt.models.worker_model import WorkerTableModel
 from ghostforge_qt.services.core_bridge import OperationRow, WorkerRow
@@ -127,5 +133,136 @@ def test_operation_graph_model_tracks_nodes_and_results(qapp):
     assert model.rowCount() == 1
     assert model.data(model.index(0, 1)) == "recenter"
     assert model.data(model.index(0, 3)) == "succeeded"
+    updated = model.update_node_params(0, {"pivot": "origin"})
+    assert updated is not None
+    assert updated.params == {"pivot": "origin"}
+    assert model.data(model.index(0, 3)) == "pending"
     assert model.remove_row(0).id == node.id
     assert model.rowCount() == 0
+
+
+def test_operation_graph_model_surfaces_node_artifacts_and_manifests(qapp):
+    operation = OperationRow(
+        kind="generate_text_to_3d",
+        label="Generate Text To 3D",
+        category="ai.source",
+        summary="",
+        operation_type="source",
+        capability="text_to_3d",
+        status="stub",
+        workers=("stub_text_to_3d",),
+        params_schema={"prompt": {"type": "string"}},
+    )
+    model = OperationGraphModel()
+
+    node = model.append_operation(operation, {"prompt": "crate"})
+    result = EvaluationResult(
+        graph_id=model.graph().graph_id,
+        steps=(
+            EvaluationStep(
+                node_id=node.id,
+                kind=node.kind,
+                status="succeeded",
+                message="vertices=8 faces=12",
+            ),
+        ),
+        metadata={
+            "side_effects": [
+                {
+                    "kind": "worker_operation",
+                    "operation": node.kind,
+                    "node_id": node.id,
+                    "asset_dir": "C:/tmp/asset",
+                    "output_mesh": "C:/tmp/asset/mesh.glb",
+                    "texture_map": "C:/tmp/asset/base_color.png",
+                    "manifest_path": "C:/tmp/asset/asset_manifest.json",
+                }
+            ]
+        },
+    )
+
+    model.set_evaluation_result(result)
+
+    assert model.data(model.index(0, 4)) == "mesh, texture"
+    assert model.data(model.index(0, 5)) == "manifest"
+    assert model.data(model.index(0, 4), model.ArtifactRole) == (
+        "C:/tmp/asset/mesh.glb",
+        "C:/tmp/asset/base_color.png",
+        "C:/tmp/asset",
+    )
+    assert model.data(model.index(0, 5), model.ManifestRole) == ("C:/tmp/asset/asset_manifest.json",)
+    tooltip = model.data(model.index(0, 4), QtCore.Qt.ItemDataRole.ToolTipRole)
+    assert "Artifacts:" in tooltip
+    assert "asset_manifest.json" in tooltip
+
+
+def test_operation_graph_model_surfaces_audit_badges_from_manifest_payload(qapp):
+    operation = OperationRow(
+        kind="generate_text_to_3d",
+        label="Generate Text To 3D",
+        category="ai.source",
+        summary="",
+        operation_type="source",
+        capability="text_to_3d",
+        status="stub",
+        workers=("stub_text_to_3d",),
+        params_schema={"prompt": {"type": "string"}},
+    )
+    model = OperationGraphModel()
+    node = model.append_operation(operation, {"prompt": "crate"})
+    result = EvaluationResult(
+        graph_id=model.graph().graph_id,
+        steps=(EvaluationStep(node_id=node.id, kind=node.kind, status="succeeded"),),
+        metadata={
+            "side_effects": [
+                {
+                    "kind": "worker_operation",
+                    "node_id": node.id,
+                    "output_mesh": "C:/tmp/mesh.glb",
+                    "manifest_path": "C:/tmp/asset_manifest.json",
+                }
+            ]
+        },
+    )
+    payload = result.model_dump(mode="json")
+    payload["manifest"] = {
+        "validation": {"status": "warnings"},
+        "custom": {"audit_history": [{"status": "passed"}, {"status": "failed"}]},
+        "artifacts": [{"role": "worker.output_mesh"}],
+    }
+
+    model.set_evaluation_result(result, payload=payload)
+
+    assert model.data(model.index(0, 5)) == "manifest/failed"
+    tooltip = model.data(model.index(0, 5), QtCore.Qt.ItemDataRole.ToolTipRole)
+    assert "Audit: failed" in tooltip
+
+
+def test_operation_graph_history_model_records_result_payloads(qapp):
+    model = OperationGraphHistoryModel()
+    result = EvaluationResult(
+        graph_id="graph_1",
+        status="succeeded",
+        output_path="C:/tmp/out.glb",
+        duration_ms=12.5,
+        steps=(EvaluationStep(node_id="n1", kind="generate_text_to_3d", status="succeeded"),),
+        metadata={"side_effects": [{"node_id": "n1", "output_mesh": "C:/tmp/out.glb"}]},
+    )
+
+    row = model.append_result(
+        result,
+        payload={
+            **result.model_dump(mode="json"),
+            "manifest": {
+                "validation": {"status": "warnings"},
+                "artifacts": [{"role": "mesh.primary"}, {"role": "texture.base_color"}],
+            },
+        },
+    )
+
+    assert row.status == "succeeded"
+    assert row.artifact_count == 2
+    assert row.audit_badge == "warnings"
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "graph_1"
+    assert model.data(model.index(0, 4)) == "warnings"

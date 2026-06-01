@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtWidgets
 
 from ghostforge_core.authoring import EditGraph, SOURCE_OPERATION_KINDS
-from ghostforge_core.manifest import ManifestBuilder, ProvenanceStep
+from ghostforge_core.manifest import ManifestBuilder, ProvenanceStep, read_manifest
 from ghostforge_qt.actions import DEFAULT_ACTIONS, ActionRegistry
 from ghostforge_qt.models.scene_model import SceneObjectRecord, SceneTableModel
 from ghostforge_qt.panels import (
@@ -49,6 +49,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mesh_selection = MeshSelectionState()
         self.operation_history = OperationHistory()
         self._graph_job_contexts: dict[str, dict[str, object]] = {}
+        self._graph_audit_job_contexts: dict[str, dict[str, object]] = {}
         self.current_topology: MeshTopologySummary | None = None
         self.theme_manager = ThemeManager(self)
         self.viewport = ViewportHost(parent=self)
@@ -188,6 +189,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.modeling_panel.transformEdited.connect(self._apply_transform_to_selection)
         self.operation_graph_panel.evaluateRequested.connect(self._evaluate_operation_graph)
         self.operation_graph_panel.graphChanged.connect(self._operation_graph_changed)
+        self.operation_graph_panel.cancelGraphJobRequested.connect(self._cancel_graph_job)
+        self.operation_graph_panel.auditGraphResultRequested.connect(self._audit_operation_graph_result)
         self.job_controller.jobsChanged.connect(self._graph_jobs_changed)
         self.content_panel.fileActivated.connect(lambda path: self.import_mesh(Path(path)))
         self.theme_manager.themeChanged.connect(self.viewport.apply_theme)
@@ -199,10 +202,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mesh_selection.active_object_id = None
         self.operation_history.clear()
         self._graph_job_contexts.clear()
+        self._graph_audit_job_contexts.clear()
         self.current_scene_path = None
         self.current_topology = None
         self.operation_graph_panel.set_active_object(None)
         self.operation_graph_panel.reset_graph()
+        self.operation_graph_panel.clear_graph_job_state()
         self._refresh_mesh_status()
         self._update_window_title()
         self.statusBar().showMessage("New scene")
@@ -373,34 +378,111 @@ class MainWindow(QtWidgets.QMainWindow):
             "before_watertight": None if selected is None else selected.watertight,
             "output_path": output_path,
         }
+        self.operation_graph_panel.set_graph_job_submitted(handle.id)
         self.job_controller.refresh()
         self.statusBar().showMessage(f"Graph evaluation submitted: {handle.id[:12]}.")
 
     @QtCore.Slot(list)
     def _graph_jobs_changed(self, jobs: list) -> None:  # type: ignore[type-arg]
-        if not self._graph_job_contexts:
+        if not self._graph_job_contexts and not self._graph_audit_job_contexts:
             return
         by_id = {job.id: job for job in jobs}
         for job_id in list(self._graph_job_contexts):
             job = by_id.get(job_id)
-            if job is None or job.status.value not in {"succeeded", "failed", "cancelled"}:
+            if job is None:
+                continue
+            self.operation_graph_panel.set_graph_job_progress(job)
+            if job.status.value not in {"succeeded", "failed", "cancelled"}:
                 continue
             context = self._graph_job_contexts.pop(job_id)
             if job.status.value != "succeeded":
                 message = job.error.message if job.error is not None else job.status.value
+                self.operation_graph_panel.set_graph_job_finished(job, message=message)
                 self.statusBar().showMessage(f"Graph job {job.id[:12]} {job.status.value}: {message}")
                 continue
-            self._apply_completed_graph_job(job.result or {}, context)
+            message = self._apply_completed_graph_job(job.result or {}, context)
+            self.operation_graph_panel.set_graph_job_finished(job, message=message)
+        for job_id in list(self._graph_audit_job_contexts):
+            job = by_id.get(job_id)
+            if job is None:
+                continue
+            self.operation_graph_panel.set_graph_audit_progress(job)
+            if job.status.value not in {"succeeded", "failed", "cancelled"}:
+                continue
+            context = self._graph_audit_job_contexts.pop(job_id)
+            if job.status.value != "succeeded":
+                message = job.error.message if job.error is not None else job.status.value
+                self.operation_graph_panel.set_graph_audit_finished(job, message=message)
+                self.statusBar().showMessage(f"Graph audit job {job.id[:12]} {job.status.value}: {message}")
+                continue
+            message = self._apply_completed_graph_audit(job.result or {}, context)
+            self.operation_graph_panel.set_graph_audit_finished(job, message=message)
 
-    def _apply_completed_graph_job(self, result_payload: dict[str, object], context: dict[str, object]) -> None:
+    @QtCore.Slot(str)
+    def _cancel_graph_job(self, job_id: str) -> None:
+        if job_id not in self._graph_job_contexts:
+            self.statusBar().showMessage(f"Graph job {job_id[:12]} is no longer active.")
+            return
+        self.job_controller.cancel(job_id)
+        self.statusBar().showMessage(f"Cancel requested for graph job {job_id[:12]}.")
+
+    @QtCore.Slot()
+    def _audit_operation_graph_result(self) -> None:
+        selected = self._selected_record()
+        if selected is None or selected.asset_dir is None:
+            self.statusBar().showMessage("Select a graph result with a manifest before auditing.")
+            return
+        if selected.manifest_path is not None and not selected.manifest_path.exists():
+            self.statusBar().showMessage(f"Graph result manifest missing: {selected.manifest_path}")
+            return
+        try:
+            handle = self.bridge.submit_audit_asset(
+                selected.asset_dir,
+                preset="default",
+                run_gltf_validator=False,
+                persist=True,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Graph Audit", str(exc))
+            return
+        self._graph_audit_job_contexts[handle.id] = {
+            "asset_dir": selected.asset_dir,
+            "object_id": selected.object_id,
+        }
+        self.operation_graph_panel.set_graph_audit_submitted(handle.id)
+        self.job_controller.refresh()
+        self.statusBar().showMessage(f"Graph audit submitted: {handle.id[:12]}.")
+
+    def _apply_completed_graph_audit(self, result_payload: dict[str, object], context: dict[str, object]) -> str:
+        asset_dir = Path(str(context["asset_dir"]))
+        try:
+            manifest = read_manifest(asset_dir)
+        except Exception as exc:
+            message = f"audit finished, but manifest refresh failed: {exc}"
+            self.statusBar().showMessage(message)
+            return message
+        status = str(result_payload.get("status") or manifest.validation.status)
+        message = (
+            f"audit {status}: "
+            f"{result_payload.get('error_count', manifest.validation.error_count)} errors, "
+            f"{result_payload.get('warning_count', manifest.validation.warning_count)} warnings"
+        )
+        self.operation_graph_panel.apply_audit_manifest(manifest.model_dump(mode="json"), message=message)
+        self._store_selected_graph_history()
+        self.statusBar().showMessage(f"Graph result {message}.")
+        return message
+
+    def _apply_completed_graph_job(self, result_payload: dict[str, object], context: dict[str, object]) -> str:
         result = self._evaluation_result_from_payload(result_payload)
         if result is not None:
-            self.operation_graph_panel.set_evaluation_result(result)
+            self.operation_graph_panel.set_evaluation_result(result, payload=result_payload)
+        graph_history = self.operation_graph_panel.history_payloads()
         output_raw = result_payload.get("output_path")
         output_path = Path(str(output_raw or context["output_path"]))
         if not output_path.exists():
-            self.statusBar().showMessage(f"Graph job completed but output is missing: {output_path}")
-            return
+            message = f"output missing: {output_path}"
+            self.statusBar().showMessage(f"Graph job completed but {message}")
+            return message
         try:
             info = self.bridge.mesh_info(output_path)
         except Exception:
@@ -417,7 +499,14 @@ class MainWindow(QtWidgets.QMainWindow):
         selected_object_id = context.get("selected_object_id")
         if selected_object_id is None:
             record = self.scene_model.add_mesh(output_path, info)
-            record = self.scene_model.update_record(record.object_id, operation_graph=graph) or record
+            record = (
+                self.scene_model.update_record(
+                    record.object_id,
+                    operation_graph=graph,
+                    operation_graph_history=graph_history,
+                )
+                or record
+            )
             updated = self._write_manifest_for_record(
                 record,
                 mesh_path=output_path,
@@ -430,12 +519,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_topology(output_path)
             self._refresh_mesh_status()
             self.statusBar().showMessage(f"Graph generated {output_path.name}.")
-            return
+            return f"generated {output_path.name}"
 
         selected = self._record_by_id(str(selected_object_id))
         if selected is None:
-            self.statusBar().showMessage(f"Graph result ready, but scene object {selected_object_id} is missing.")
-            return
+            message = f"scene object {selected_object_id} is missing"
+            self.statusBar().showMessage(f"Graph result ready, but {message}.")
+            return message
         updated = self.scene_model.append_operation(
             selected.object_id,
             "evaluate_authoring_graph",
@@ -444,6 +534,7 @@ class MainWindow(QtWidgets.QMainWindow):
             faces=info.faces if info is not None else selected.faces,
             watertight=info.watertight if info is not None else selected.watertight,
             operation_graph=graph if isinstance(graph, EditGraph) else selected.operation_graph,
+            operation_graph_history=graph_history,
         )
         if updated is not None:
             updated = self._write_manifest_for_record(
@@ -472,6 +563,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mesh_selection.selected_object_ids = {selected.object_id}
         self._refresh_mesh_status()
         self.statusBar().showMessage(f"Graph evaluated: {output_path.name}.")
+        return f"evaluated {output_path.name}"
 
     def _evaluation_result_from_payload(self, payload: dict[str, object]):
         try:
@@ -498,11 +590,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 "base_asset_path": str(selected.path),
             }
         )
-        self.scene_model.update_record(selected.object_id, operation_graph=graph)
+        self.scene_model.update_record(
+            selected.object_id,
+            operation_graph=graph,
+            operation_graph_history=self.operation_graph_panel.history_payloads(),
+        )
         try:
             self.bridge.save_authoring_graph(graph)
         except Exception as exc:
             self.statusBar().showMessage(f"Graph save skipped: {exc}")
+
+    def _store_selected_graph_history(self) -> None:
+        selected = self._selected_record()
+        if selected is None:
+            return
+        self.scene_model.update_record(
+            selected.object_id,
+            operation_graph_history=self.operation_graph_panel.history_payloads(),
+        )
 
     @QtCore.Slot(object)
     def _apply_transform_to_selection(self, transform) -> None:  # type: ignore[no-untyped-def]
@@ -650,6 +755,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.modeling_panel.set_transform(selected.transform)
             self.operation_graph_panel.set_active_object(selected)
             self.operation_graph_panel.set_graph(self._graph_for_record(selected), emit=False)
+            self.operation_graph_panel.set_history_payloads(selected.operation_graph_history)
             self._refresh_topology(selected.path)
         else:
             self.operation_graph_panel.set_active_object(None)

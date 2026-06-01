@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ghostforge_core import CoreConfig, CoreContext, EvaluateGraphRequest, bootstrap
+from ghostforge_core import AuditAssetRequest, CoreConfig, CoreContext, EvaluateGraphRequest, bootstrap
 from ghostforge_core.authoring import EditGraph, EvaluationResult, SOURCE_OPERATION_KINDS, evaluate_graph
 from ghostforge_core.operations import mesh_info as mesh_info_op
 from ghostforge_core.types import JobHandle, MeshInfo
@@ -225,3 +225,19 @@ class CoreBridge:
             asset_id=asset_id,
         )
         return self.context.runner.submit("evaluate_edit_graph", spec)
+
+    def submit_audit_asset(
+        self,
+        asset_dir: Path,
+        *,
+        preset: str = "default",
+        run_gltf_validator: bool = False,
+        persist: bool = True,
+    ) -> JobHandle:
+        spec = AuditAssetRequest(
+            asset_dir=asset_dir,
+            preset=preset,
+            run_gltf_validator=run_gltf_validator,
+            persist=persist,
+        )
+        return self.context.runner.submit("audit_asset", spec)

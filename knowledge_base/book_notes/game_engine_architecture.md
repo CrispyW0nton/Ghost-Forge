@@ -59,6 +59,32 @@ terminal job payloads update or create scene records, write the scene object's
 final manifest, refresh topology diagnostics, and preserve the graph resource
 for later MCP inspection or engine package creation.
 
+Graph jobs should be debuggable while they run. The editor now mirrors durable
+job progress into the graph panel, including active job id, stage/message,
+cancel-request state, failure/cancel terminal states, and retry affordance. That
+keeps long-running worker and hosted-provider operations visible at the same
+resource boundary used by MCP.
+
+Completed graph jobs should also expose their resource effects at the node
+level. The Qt graph model now derives artifact and manifest badges from
+evaluation metadata side effects, including output meshes, texture maps,
+asset directories, and node-local manifest paths. Failed evaluations select the
+first failed node so the artist or agent can jump straight to the broken step.
+The graph panel also keeps a model-backed result history summarizing the same
+payloads, including manifest validation/audit status when a manifest payload is
+available.
+
+Graph-linked audit actions now keep the asset pipeline authoritative: Qt submits
+an `audit_asset` job for the selected graph result's manifest-backed asset
+directory, waits for the durable job to settle, then re-reads the manifest so
+the graph badges/history reflect the persisted validation and audit trail.
+
+Graph result history is now persisted with scene objects. This treats evaluation
+and audit context as resource state that survives editor restarts, rather than
+as UI-only memory. Future MCP resources and engine handoff packages should be
+able to inspect the same history when deciding whether a generated asset is
+ready to ship.
+
 ### Asset Contract
 
 Every generated or imported asset should move toward:
@@ -101,6 +127,11 @@ Do not present TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, or SyncMVD as 
 - Scene persistence that keeps operation graph resources attached to scene objects.
 - Durable graph-evaluation jobs that persist progress, result payloads, and last evaluation reports.
 - Qt completion handling for graph-evaluation jobs that updates the scene and manifest from the durable job payload.
+- Graph-panel progress/cancel/failure UI backed by durable job handles.
+- Per-node graph result badges for worker artifacts/manifests and failed-node focus from evaluation reports.
+- Graph result history rows with artifact counts and manifest validation/audit badges.
+- Graph-linked audit jobs that persist audit history and refresh the graph panel from the manifest.
+- Scene documents that restore graph result/audit history alongside graph resources.
 - Audit gates block engine handoff unless forced.
 - Worker probe state is rendered accurately in the Qt model.
 - A failed model worker leaves a durable failed job with logs and no partial success badge.

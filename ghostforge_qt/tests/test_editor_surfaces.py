@@ -70,6 +70,17 @@ def test_scene_document_service_round_trips_records(tmp_path):
             base_asset_path=str(tmp_path / "cube.glb"),
             nodes=(OperationNode(id="n1_recenter", kind="recenter", params={"pivot": "centroid"}),),
         ),
+        operation_graph_history=(
+            {
+                "graph_id": "obj_cube_graph",
+                "status": "succeeded",
+                "output_path": str(tmp_path / "cube_out.glb"),
+                "duration_ms": 12.0,
+                "artifact_count": 1,
+                "audit_badge": "passed",
+                "message": "audit passed",
+            },
+        ),
     )
     scene_path = service.default_scene_path(project_root, "test scene")
 
@@ -87,6 +98,7 @@ def test_scene_document_service_round_trips_records(tmp_path):
     assert restored.operation_graph is not None
     assert restored.operation_graph.graph_id == "obj_cube_graph"
     assert restored.operation_graph.nodes[0].kind == "recenter"
+    assert restored.operation_graph_history[0]["audit_badge"] == "passed"
 
 
 def test_theme_manager_switches_builtin_themes(qapp):

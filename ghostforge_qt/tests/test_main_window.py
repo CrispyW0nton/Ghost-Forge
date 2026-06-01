@@ -15,13 +15,14 @@ import trimesh
 
 def _wait_for_graph_jobs(window: MainWindow, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline and window._graph_job_contexts:
+    while time.monotonic() < deadline and (window._graph_job_contexts or window._graph_audit_job_contexts):
         window.job_controller.refresh()
         QtCore.QCoreApplication.processEvents()
-        if not window._graph_job_contexts:
+        if not window._graph_job_contexts and not window._graph_audit_job_contexts:
             return
         time.sleep(0.05)
     assert not window._graph_job_contexts
+    assert not window._graph_audit_job_contexts
 
 
 def test_main_window_registers_editor_actions(qapp, tmp_path):
@@ -69,6 +70,8 @@ def test_main_window_evaluates_selected_mesh_operation_graph(qapp, tmp_path):
         assert window.operation_graph_panel.graph_model.data(
             window.operation_graph_panel.graph_model.index(0, 3)
         ) == "succeeded"
+        assert "succeeded" in window.operation_graph_panel.job_status.text()
+        assert window.operation_graph_panel.job_progress.value() == 100
         manifest = read_manifest(after.asset_dir)
         steps = [step for step in manifest.provenance if step.kind == "evaluate_authoring_graph"]
         assert steps[-1].parameters["graph_id"] == window.operation_graph_panel.graph().graph_id
@@ -100,6 +103,51 @@ def test_main_window_source_graph_creates_scene_object(qapp, tmp_path):
         graph_steps = [step for step in manifest.provenance if step.kind == "evaluate_authoring_graph"]
         assert graph_steps[-1].parameters["source_mode"] == "operation"
         assert graph_steps[-1].parameters["side_effects"][0]["operation"] == "generate_text_to_3d"
+        assert "succeeded" in window.operation_graph_panel.job_status.text()
+    finally:
+        window.close()
+
+
+def test_main_window_runs_graph_result_audit_and_refreshes_history(qapp, tmp_path):
+    source = tmp_path / "offset.glb"
+    mesh = trimesh.creation.box(extents=(1, 1, 1))
+    mesh.apply_translation((5.0, 0.0, 0.0))
+    mesh.export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=True))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source)
+        operation = next(row for row in bridge.list_operations() if row.kind == "recenter")
+        window.operation_graph_panel.graph_model.append_operation(operation, {"pivot": "centroid"})
+        window._evaluate_operation_graph()
+        _wait_for_graph_jobs(window)
+
+        window._audit_operation_graph_result()
+        assert window._graph_audit_job_contexts
+        _wait_for_graph_jobs(window)
+
+        record = window.scene_model.records()[0]
+        manifest = read_manifest(record.asset_dir)
+        assert manifest.custom["audit_history"]
+        assert window.operation_graph_panel.history_model.rowCount() >= 2
+        assert window.operation_graph_panel.history_model.data(
+            window.operation_graph_panel.history_model.index(0, 4)
+        ) in {"passed", "warnings", "failed", "skipped"}
+    finally:
+        window.close()
+
+
+def test_main_window_routes_graph_job_cancel(qapp, tmp_path, monkeypatch):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    calls: list[str] = []
+    try:
+        monkeypatch.setattr(window.job_controller, "cancel", lambda job_id: calls.append(job_id))
+        window._graph_job_contexts["job-cancel-123456"] = {"output_path": tmp_path / "unused.glb"}
+
+        window._cancel_graph_job("job-cancel-123456")
+
+        assert calls == ["job-cancel-123456"]
     finally:
         window.close()
 
@@ -175,9 +223,26 @@ def test_main_window_saves_and_reopens_scene_operation_graph(qapp, tmp_path):
         operation = next(row for row in bridge.list_operations() if row.kind == "recenter")
         window.operation_graph_panel.graph_model.append_operation(operation, {"pivot": "centroid"})
         window._operation_graph_changed(window.operation_graph_panel.graph())
+        history = (
+            {
+                "graph_id": window.operation_graph_panel.graph().graph_id,
+                "status": "succeeded",
+                "output_path": str(tmp_path / "cube_graph_out.glb"),
+                "duration_ms": 7.0,
+                "artifact_count": 1,
+                "audit_badge": "passed",
+                "message": "audit passed",
+            },
+        )
+        window.operation_graph_panel.set_history_payloads(history)
+        window.scene_model.update_record(
+            record.object_id,
+            operation_graph_history=window.operation_graph_panel.history_payloads(),
+        )
 
         stored = window.scene_model.records()[0]
         assert stored.operation_graph is not None
+        assert stored.operation_graph_history == history
         assert bridge.context.graphs.load(stored.operation_graph.graph_id).nodes[0].kind == "recenter"
         window.save_scene(scene_path)
 
@@ -189,8 +254,13 @@ def test_main_window_saves_and_reopens_scene_operation_graph(qapp, tmp_path):
         assert restored.object_id == record.object_id
         assert restored.operation_graph is not None
         assert restored.operation_graph.nodes[0].kind == "recenter"
+        assert restored.operation_graph_history == history
         assert window.operation_graph_panel.graph().graph_id == restored.operation_graph.graph_id
         assert window.operation_graph_panel.graph_model.rowCount() == 1
+        assert window.operation_graph_panel.history_model.rowCount() == 1
+        assert window.operation_graph_panel.history_model.data(
+            window.operation_graph_panel.history_model.index(0, 4)
+        ) == "passed"
     finally:
         window.close()
 

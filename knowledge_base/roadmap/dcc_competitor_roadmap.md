@@ -68,6 +68,12 @@ Recent progress as of 2026-06-01:
 - MCP now exposes enriched operation descriptors, graph resources, graph evaluation resources, and source-worker graph evaluation with manifest side-effect provenance.
 - Core and MCP now support durable `evaluate_edit_graph` jobs, with progress/result persistence and last-evaluation resources for long-running graph execution.
 - Qt graph evaluation now submits durable jobs, watches terminal job state, and applies successful payloads back into scene objects or new source-generated objects with manifests, topology refresh, operation history, and node status updates.
+- Qt operation-graph parameter editing now renders from operation descriptors, so new core/MCP operation schemas can surface in the desktop editor without hand-written prompt/reference fields.
+- Qt graph jobs now expose active job id, progress stage/message, cancel-request routing, terminal failure/cancel states, and retry controls in the operation-graph panel.
+- Qt graph result rows now surface per-node artifact and manifest badges from evaluation side effects and focus the first failed node for repair.
+- Qt graph result history now tracks graph status, output path, artifact count, and manifest validation/audit badge from evaluation payloads.
+- Qt graph-linked audit actions now submit durable audit jobs for manifest-backed graph results and refresh badges/history from persisted audit history.
+- `.gforge` scene documents now persist per-object graph result history, so reopened scenes restore evaluation/audit context in the operation-graph panel.
 
 ## Competitor Capability Map
 
@@ -263,7 +269,7 @@ Acceptance gate:
 7. UV workspace MVP: 2D UV viewport, seam marking, unwrap, pack, checker, distortion overlay.
 8. Material/texture inspector: PBR slots, texture previews, generated texture provenance, material assignment.
 9. Operation/modifier graph: core-owned graph nodes for cleanup/modeling/modifier operations.
-10. Graph operation UI polish: descriptor-driven node parameter forms, per-node artifact links, manifest/audit badges, progress/cancel states, and result history.
+10. Graph operation UI polish: richer descriptor-driven node parameter forms, graph result inspectors, artifact actions, and engine-readiness actions.
 11. AI worker manager: dependency probes, install/cache UI, sample generation tests, and honest capability gates.
 12. Hosted Tripo generation: secure credential surface, smart mesh presets, text-to-3D jobs, vertical-slice generation extras, and Unity/Unreal bridge routing.
 
@@ -278,9 +284,9 @@ Acceptance gate:
 
 ## Immediate Next Slice
 
-Deepen graph editing UX and background completion handling:
+Deepen graph result inspection and engine-readiness handling:
 
-- Add parameter editors generated from operation descriptors rather than the current minimal prompt/reference fields.
-- Add in-flight graph progress, failure, cancellation, and retry states to the graph panel, backed by durable job ids.
-- Surface node artifact links and manifest/audit badges directly in the graph panel.
-- Keep graph ids stable across Qt save/open and MCP inspection.
+- Add a graph-result inspector that opens output meshes, asset directories, manifests, audit history, and side-effect artifacts from selected history/node rows.
+- Add engine-readiness actions from graph results: audit gate status, retarget/package shortcuts, and Unity/Unreal bridge creation when manifests pass.
+- Expand descriptor-generated parameter editors with path pickers, presets, drag reorder, and per-node enable/disable controls.
+- Keep graph ids and graph-history payloads stable across Qt save/open and MCP inspection.
