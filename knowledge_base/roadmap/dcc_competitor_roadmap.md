@@ -79,6 +79,13 @@ Recent progress as of 2026-06-01:
 - Qt graph result inspector now records planned retarget history rows and surfaces the retarget-specific audit diagnostics that caused the planner to emit graph nodes.
 - `.gforge` scene documents now preserve planned retarget report payloads in graph history so reopened scenes restore the diagnostic explanation.
 - Qt now re-lints retargeted assets after graph evaluation, records verified history rows, and compares planned, resolved, remaining, and newly introduced retarget diagnostics.
+- Qt graph result history now preserves output, artifact, asset-directory, and manifest paths and exposes open/reveal actions from the result inspector.
+- Qt graph result resources are now listed in a model-backed table that distinguishes outputs, artifacts, manifests, and asset directories, with selected open/reveal actions and Windows file reveal routing.
+- Qt graph result resources now include manifest-derived bridge package rows and latest audit-history evidence rows, restored through graph history payloads.
+- Qt graph result resources now show selected-resource metadata drill-down for bridge handoff contracts, audit summaries, manifest counts, and output context.
+- Qt manifest resource drill-down now includes validation issue code summaries and latest provenance step chains.
+- Qt manifest resource drill-down now renders validation issue lists and provenance step lists for selected-resource triage.
+- Qt audit and bridge resource drill-down now renders persisted audit issue lines and compact bridge package preview fields.
 
 ## Competitor Capability Map
 
@@ -291,7 +298,7 @@ Acceptance gate:
 
 Deepen graph result inspection and engine-readiness handling:
 
-- Add file/action affordances for graph result outputs: open/reveal output meshes, asset directories, manifests, audit history, and side-effect artifacts from selected history/node rows.
+- Add bridge package JSON file preview and resource-table filters for artifact, manifest, audit, and bridge rows.
 - Promote retarget comparison into a richer diff view with direct focus on remaining/new diagnostic families.
 - Expand descriptor-generated parameter editors with path pickers, presets, drag reorder, and per-node enable/disable controls.
 - Keep graph ids and graph-history payloads stable across Qt save/open and MCP inspection.

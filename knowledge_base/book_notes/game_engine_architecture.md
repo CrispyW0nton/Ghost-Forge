@@ -114,6 +114,49 @@ records the post-evaluation report, and compares planned issue keys against the
 new report. Resolved, remaining, and newly introduced diagnostics become
 history data that future MCP resources and bridge gates can inspect.
 
+Graph result artifacts must be reachable resources. The Qt result history now
+records side-effect output meshes, texture maps, asset directories, and
+manifest paths as structured details, then the editor exposes open/reveal
+actions for those paths. This makes graph evaluation output inspectable in the
+same way a tools pipeline expects build products, logs, and packages to be
+inspectable.
+
+The next refinement treats those paths as a resource table, not button-local
+state. Output meshes, artifacts, manifests, and asset directories now have
+kind/source/path rows, which is closer to a tools pipeline browser and makes it
+possible to expand into audit-history and package drill-downs without changing
+the graph evaluation contract.
+
+Bridge packages and audit history now participate in that same resource table.
+Manifest `engine.bridge.*` artifacts, `custom.engine_export_bridges` package
+paths, and latest `custom.audit_history` summaries become inspectable rows,
+making engine handoff and validation evidence visible beside the graph result
+that produced the asset.
+
+The table now has lightweight drill-down metadata as well as paths. Selected
+bridge resources expose the target engine and recommended MCP handoff contract;
+selected audit resources expose preset/status/counts/timing. This makes the
+resource table a real debugging surface for engine handoff readiness instead of
+a file launcher alone.
+
+Manifest resource rows now include validation issue summaries and latest
+provenance steps. That turns manifest-driven asset state into inspectable
+pipeline evidence inside the graph editor: users can see why a result is ready
+or blocked, which operation trail produced it, and where to open the underlying
+manifest if deeper investigation is needed.
+
+The validation/provenance drill-down now includes lists, not only headline
+counts. Issue rows show severity, code, location, and message; provenance rows
+show ordered operation steps with job/timing hints. This is closer to a build
+pipeline report and gives Qt users the same evidence MCP callers inspect in
+structured manifest resources.
+
+Audit and bridge resources now complete the same loop. Persisted audit reports
+contribute issue lines, while bridge history contributes a compact package
+preview of the external handoff contract. This makes the Qt graph inspector a
+single place to inspect generated products, validation evidence, provenance,
+and Unity/Unreal handoff metadata.
+
 ### Asset Contract
 
 Every generated or imported asset should move toward:
@@ -166,6 +209,13 @@ Do not present TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, or SyncMVD as 
 - Qt graph result retarget diagnostics that keep planner audit issues visible beside the generated graph.
 - Persisted planned-retarget report payloads that restore across `.gforge` save/open.
 - Post-evaluation retarget audit comparisons that persist resolved, remaining, and new diagnostic keys.
+- Graph result file actions that open/reveal output meshes, manifests, asset directories, and side-effect artifacts from persisted history.
+- Model-backed graph result resource rows for output/artifact/manifest/asset-directory paths.
+- Manifest-derived graph result resource rows for bridge packages and latest audit-history evidence.
+- Selected-resource drill-down metadata for bridge package contracts and audit-history summaries.
+- Manifest resource drill-down details for validation issue codes and latest provenance step chains.
+- Full selected-resource validation issue and provenance step lists for manifest rows.
+- Selected-resource audit issue lists and bridge package preview fields.
 - Audit gates block engine handoff unless forced.
 - Worker probe state is rendered accurately in the Qt model.
 - A failed model worker leaves a durable failed job with logs and no partial success badge.

@@ -7,6 +7,8 @@ from PySide6 import QtCore
 from ghostforge_core.authoring import EvaluationResult, EvaluationStep
 from ghostforge_core.types import MeshInfo
 from ghostforge_qt.models.operation_graph_model import (
+    GraphResultResource,
+    GraphResultResourceModel,
     OperationGraphHistoryModel,
     OperationGraphModel,
     OperationPaletteModel,
@@ -255,17 +257,57 @@ def test_operation_graph_history_model_records_result_payloads(qapp):
             **result.model_dump(mode="json"),
             "manifest": {
                 "validation": {"status": "warnings"},
-                "artifacts": [{"role": "mesh.primary"}, {"role": "texture.base_color"}],
+                "artifacts": [
+                    {"role": "mesh.primary"},
+                    {"role": "texture.base_color"},
+                    {"role": "engine.bridge.unity", "path": "C:/tmp/ghostforge_bridge_unity.json"},
+                ],
+                "custom": {
+                    "audit_history": [{"preset": "unity", "status": "warnings", "warning_count": 2}],
+                    "engine_export_bridges": [
+                        {"target_engine": "unity", "package_path": "C:/tmp/ghostforge_bridge_unity.json"}
+                    ],
+                },
             },
         },
     )
 
     assert row.status == "succeeded"
-    assert row.artifact_count == 2
+    assert row.artifact_count == 3
     assert row.audit_badge == "warnings"
     assert model.rowCount() == 1
     assert model.data(model.index(0, 0)) == "graph_1"
     assert model.data(model.index(0, 4)) == "warnings"
+    payload = model.payloads()[0]
+    assert payload["details"]["artifact_paths"] == ["C:/tmp/out.glb"]
+    assert payload["details"]["bridge_paths"] == ["C:/tmp/ghostforge_bridge_unity.json"]
+    assert payload["details"]["audit_history"]["status"] == "warnings"
+
+
+def test_graph_result_resource_model_lists_actionable_paths(qapp):
+    model = GraphResultResourceModel(
+        [
+            GraphResultResource("output", "C:/tmp/out.glb", "history"),
+            GraphResultResource(
+                "manifest",
+                "C:/tmp/asset_manifest.json",
+                "selected node",
+                {"validation": "passed"},
+            ),
+        ]
+    )
+
+    assert model.rowCount() == 2
+    assert model.data(model.index(0, 0)) == "output"
+    assert model.data(model.index(1, 1)) == "selected node"
+    assert model.data(model.index(1, 0), model.PathRole) == "C:/tmp/asset_manifest.json"
+    assert "validation: passed" in model.data(model.index(1, 0), QtCore.Qt.ItemDataRole.ToolTipRole)
+    assert model.row_at(0).path == "C:/tmp/out.glb"
+
+    model.set_rows([GraphResultResource("asset_dir", "C:/tmp/asset", "history")])
+
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 2)) == "C:/tmp/asset"
 
 
 def test_operation_graph_history_model_appends_planned_payload(qapp):

@@ -138,6 +138,49 @@ planned diagnostics were resolved, which remain, and which new issues appeared.
 That keeps the graph inspector useful as an edit loop, not just a pre-export
 warning list.
 
+Graph result file actions should follow the same signal/service split. History
+rows now retain structured output, artifact, asset-directory, and manifest
+paths, while the panel exposes open/reveal buttons and emits path intent. The
+main window owns `QDesktopServices` handoff. This keeps the result inspector
+testable headlessly and lets saved scenes restore actionable graph resources.
+
+The inspector resource list is now model-backed. `GraphResultResourceModel`
+normalizes output meshes, texture artifacts, manifests, and asset directories
+into rows with kind/source/path columns, so the UI can offer selected-resource
+open/reveal actions and still restore those rows from graph history after
+scene reload.
+
+Manifest-backed resources should appear in the same table. The inspector now
+adds bridge-package rows from `engine.bridge.*` artifacts and
+`custom.engine_export_bridges`, plus audit-history rows pointing back to the
+manifest with preset/status source text. History payloads retain bridge paths
+and latest audit summary so reopen can restore the same resource surface.
+
+Selected resource metadata belongs beside the resource table, not in tooltips
+alone. Graph result resources now carry a small details payload, and the Qt
+panel renders that payload in a selectable details label. Bridge rows show
+target engine, recommended MCP server/tool, and direct-call status; audit rows
+show preset, status, counts, timing, and manifest path context.
+
+Manifest rows now expose compact validation and provenance drill-down data too.
+The details payload includes asset id, validation status/counts, short issue
+code summaries from the manifest validation report, artifact/provenance counts,
+and the latest provenance step chain. This gives the graph inspector a first
+real manifest-debug surface without forcing users to open raw JSON for every
+readiness question.
+
+The drill-down now carries list detail as structured UI text. Validation report
+issues render by severity with code, location, and message, while provenance
+steps render in order with kind, short job id, and timing when available. This
+keeps the details label useful for real triage while the manifest file remains
+the authoritative full record.
+
+Audit and bridge rows now carry list detail too. Audit resources render issue
+lines from the persisted audit report, and bridge resources render a compact
+package preview with target engine, recommended MCP server/tool, direct-call
+flag, and package path. The same details persist in graph history so reopen
+keeps the handoff/debug context.
+
 ## First Tests To Add
 
 - Main-window construction without GPU/model dependencies.
@@ -159,3 +202,10 @@ warning list.
 - Operation graph result inspector records planned retarget history rows and displays retarget audit diagnostics.
 - Scene save/open restores planned retarget diagnostic payloads into the graph result inspector.
 - Completed retarget graph evaluations compare planned and post-evaluation diagnostics and persist the verified result row.
+- Graph result history persists output/artifact/manifest/asset-directory paths and the inspector emits open/reveal path actions without launching the OS in panel tests.
+- Graph result resource rows are model-backed and distinguish artifacts from asset directories when driving selected open/reveal actions.
+- Graph result resources include manifest-derived bridge package rows and audit-history rows that restore from saved graph history.
+- Selected graph result resources display metadata drill-down for bridge handoff, audit evidence, manifest summary, and output context.
+- Manifest graph result resource details summarize validation issue codes and latest provenance steps.
+- Manifest graph result resource details render validation issue lists and provenance step lists for selected-resource triage.
+- Audit and bridge graph result resources render persisted audit issue lists and bridge package preview fields.

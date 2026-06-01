@@ -10,6 +10,79 @@ from ghostforge_core.authoring import EditGraph, EvaluationResult, OperationNode
 from ghostforge_qt.services.core_bridge import OperationRow
 
 
+@dataclass(frozen=True)
+class GraphResultResource:
+    kind: str
+    path: str
+    source: str = ""
+    details: dict[str, object] = field(default_factory=dict)
+
+
+class GraphResultResourceModel(QtCore.QAbstractTableModel):
+    COLUMNS = ("Kind", "Source", "Path")
+    ResourceRole = QtCore.Qt.ItemDataRole.UserRole + 1
+    PathRole = QtCore.Qt.ItemDataRole.UserRole + 2
+    KindRole = QtCore.Qt.ItemDataRole.UserRole + 3
+
+    def __init__(
+        self,
+        rows: list[GraphResultResource] | None = None,
+        parent: QtCore.QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rows = rows or []
+
+    def rowCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self.COLUMNS)
+
+    def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        if role == self.ResourceRole:
+            return row
+        if role == self.PathRole:
+            return row.path
+        if role == self.KindRole:
+            return row.kind
+        if role == QtCore.Qt.ItemDataRole.ToolTipRole:
+            detail_text = _detail_text(row.details)
+            parts = [f"{row.kind} from {row.source or 'result'}", row.path]
+            if detail_text:
+                parts.append(detail_text)
+            return "\n".join(parts)
+        if role != QtCore.Qt.ItemDataRole.DisplayRole:
+            return None
+        values = (row.kind, row.source or "-", row.path)
+        return values[index.column()]
+
+    def headerData(
+        self,
+        section: int,
+        orientation: QtCore.Qt.Orientation,
+        role: int = QtCore.Qt.ItemDataRole.DisplayRole,
+    ):
+        if role == QtCore.Qt.ItemDataRole.DisplayRole and orientation == QtCore.Qt.Orientation.Horizontal:
+            return self.COLUMNS[section]
+        return None
+
+    def set_rows(self, rows: list[GraphResultResource] | tuple[GraphResultResource, ...]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def row_at(self, row: int) -> GraphResultResource | None:
+        if row < 0 or row >= len(self._rows):
+            return None
+        return self._rows[row]
+
+    def rows(self) -> list[GraphResultResource]:
+        return list(self._rows)
+
+
 class OperationPaletteModel(QtCore.QAbstractTableModel):
     COLUMNS = ("Kind", "Type", "Status", "Workers", "Summary")
     OperationRole = QtCore.Qt.ItemDataRole.UserRole + 1
@@ -344,6 +417,7 @@ class OperationGraphHistoryModel(QtCore.QAbstractTableModel):
             artifact_count=_artifact_count(payload),
             audit_badge=_manifest_audit_badge(payload.get("manifest")),
             message=message or _result_message(result),
+            details=_result_path_details(payload),
         )
         self.beginInsertRows(QtCore.QModelIndex(), 0, 0)
         self._rows.insert(0, row)
@@ -419,6 +493,17 @@ def _params_text(params: dict[str, object]) -> str:
     return json.dumps(params, sort_keys=True)
 
 
+def _detail_text(details: dict[str, object]) -> str:
+    if not details:
+        return ""
+    parts: list[str] = []
+    for key, value in details.items():
+        if value in (None, "", [], {}):
+            continue
+        parts.append(f"{key}: {value}")
+    return "\n".join(parts)
+
+
 def _status_color(status: str) -> QtGui.QColor:
     if status in {"available", "runnable", "succeeded", "passed"}:
         return QtGui.QColor("#1F8F3A")
@@ -490,6 +575,119 @@ def _artifact_count(payload: dict[str, object]) -> int:
     return count
 
 
+def _result_path_details(payload: dict[str, object]) -> dict[str, object]:
+    artifact_paths: list[str] = []
+    asset_dirs: list[str] = []
+    bridge_paths: list[str] = []
+    manifest_paths: list[str] = []
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    side_effects = metadata.get("side_effects") if isinstance(metadata, dict) else None
+    if isinstance(side_effects, list):
+        for effect in side_effects:
+            if not isinstance(effect, dict):
+                continue
+            _append_path(artifact_paths, effect.get("output_mesh"))
+            _append_path(artifact_paths, effect.get("texture_map"))
+            _append_path(asset_dirs, effect.get("asset_dir"))
+            _append_path(manifest_paths, effect.get("manifest_path"))
+
+    manifest = payload.get("manifest")
+    if isinstance(manifest, dict) and isinstance(manifest.get("artifacts"), list):
+        for artifact in manifest["artifacts"]:
+            if isinstance(artifact, dict):
+                role = str(artifact.get("role") or "")
+                if role.startswith("engine.bridge."):
+                    _append_path(bridge_paths, artifact.get("path"))
+                else:
+                    _append_path(artifact_paths, artifact.get("path"))
+    custom = manifest.get("custom") if isinstance(manifest, dict) and isinstance(manifest.get("custom"), dict) else {}
+    bridge_history = custom.get("engine_export_bridges") if isinstance(custom, dict) else None
+    bridge_summaries: list[dict[str, object]] = []
+    if isinstance(bridge_history, list):
+        for item in bridge_history:
+            if isinstance(item, dict):
+                _append_path(bridge_paths, item.get("package_path"))
+                bridge_summaries.append(
+                    {
+                        "target_engine": item.get("target_engine"),
+                        "recommended_mcp_server": item.get("recommended_mcp_server"),
+                        "recommended_tool": item.get("recommended_tool"),
+                        "package_path": item.get("package_path"),
+                        "created_at": item.get("created_at"),
+                        "direct_engine_call": item.get("direct_engine_call"),
+                        "package_preview": _bridge_preview_lines(item),
+                    }
+                )
+
+    details: dict[str, object] = {}
+    if artifact_paths:
+        details["artifact_paths"] = list(dict.fromkeys(artifact_paths))
+    if asset_dirs:
+        details["asset_dirs"] = list(dict.fromkeys(asset_dirs))
+    if bridge_paths:
+        details["bridge_paths"] = list(dict.fromkeys(bridge_paths))
+    if bridge_summaries:
+        details["bridge_history"] = bridge_summaries
+    if manifest_paths:
+        details["manifest_paths"] = list(dict.fromkeys(manifest_paths))
+    audit_history = custom.get("audit_history") if isinstance(custom, dict) else None
+    if isinstance(audit_history, list) and audit_history and isinstance(audit_history[-1], dict):
+        latest = audit_history[-1]
+        details["audit_history"] = {
+            "preset": latest.get("preset"),
+            "status": latest.get("status"),
+            "error_count": latest.get("error_count"),
+            "warning_count": latest.get("warning_count"),
+            "info_count": latest.get("info_count"),
+            "duration_seconds": latest.get("duration_seconds"),
+            "started_at": latest.get("started_at"),
+            "finished_at": latest.get("finished_at"),
+            "audit_issue_list": _audit_issue_lines(latest),
+        }
+    return details
+
+
+def _append_path(paths: list[str], value: object) -> None:
+    if value is None:
+        return
+    text = str(value)
+    if text:
+        paths.append(text)
+
+
+def _bridge_preview_lines(item: dict[str, object]) -> list[str]:
+    fields = (
+        ("target_engine", item.get("target_engine")),
+        ("recommended_mcp_server", item.get("recommended_mcp_server")),
+        ("recommended_tool", item.get("recommended_tool")),
+        ("direct_engine_call", item.get("direct_engine_call")),
+        ("package_path", item.get("package_path")),
+    )
+    return [f"{key}={value}" for key, value in fields if value not in (None, "", [], {})]
+
+
+def _audit_issue_lines(report: dict[str, object]) -> list[str]:
+    issues = report.get("issues")
+    if not isinstance(issues, list):
+        return []
+    lines: list[str] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        severity = str(issue.get("severity") or "issue")
+        rule = str(issue.get("rule") or "")
+        code = str(issue.get("code") or "diagnostic")
+        message = str(issue.get("message") or "")
+        target = str(issue.get("target") or "")
+        prefix = f"{severity} {rule}:{code}" if rule else f"{severity} {code}"
+        if target:
+            prefix += f" [{target}]"
+        if message:
+            prefix += f": {message}"
+        lines.append(prefix)
+    return lines
+
+
 def _result_message(result: EvaluationResult) -> str:
     failed = [step for step in result.steps if step.status == "failed"]
     if failed:
@@ -514,6 +712,8 @@ def _history_row_from_payload(payload: dict[str, object]) -> GraphEvaluationHist
 
 __all__ = [
     "GraphEvaluationHistoryRow",
+    "GraphResultResource",
+    "GraphResultResourceModel",
     "OperationGraphHistoryModel",
     "OperationGraphModel",
     "OperationPaletteModel",

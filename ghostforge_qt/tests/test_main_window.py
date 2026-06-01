@@ -46,6 +46,41 @@ def test_main_window_registers_editor_actions(qapp, tmp_path):
         window.close()
 
 
+def test_main_window_opens_and_reveals_graph_result_paths(qapp, tmp_path, monkeypatch):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    output_path = tmp_path / "asset.glb"
+    asset_dir = tmp_path / "asset"
+    output_path.write_text("mesh")
+    asset_dir.mkdir()
+    opened: list[object] = []
+    revealed: list[object] = []
+
+    def fake_open(path):
+        opened.append(path)
+        return True
+
+    def fake_reveal(path):
+        revealed.append(path)
+        return True
+
+    monkeypatch.setattr(window, "_open_local_path_url", fake_open)
+    monkeypatch.setattr(window, "_reveal_local_path", fake_reveal)
+    try:
+        assert window._open_graph_result_path(str(output_path))
+        assert opened[-1] == output_path
+
+        assert window._reveal_graph_result_path(str(output_path))
+        assert revealed[-1] == output_path
+
+        assert window._reveal_graph_result_path(str(asset_dir))
+        assert revealed[-1] == asset_dir
+
+        assert not window._open_graph_result_path(str(tmp_path / "missing.glb"))
+    finally:
+        window.close()
+
+
 def test_main_window_evaluates_selected_mesh_operation_graph(qapp, tmp_path):
     source = tmp_path / "offset.glb"
     mesh = trimesh.creation.box(extents=(1, 1, 1))

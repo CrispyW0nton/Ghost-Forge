@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6 import QtCore, QtWidgets
 
 from ghostforge_core.authoring import EditGraph, EvaluationResult
 from ghostforge_core.types import JobHandle
 from ghostforge_qt.models.operation_graph_model import (
+    GraphResultResource,
+    GraphResultResourceModel,
     OperationGraphHistoryModel,
     OperationGraphModel,
     OperationPaletteModel,
@@ -22,6 +26,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
     auditGraphResultRequested = QtCore.Signal()
     createEngineBridgeRequested = QtCore.Signal(str)
     planRetargetGraphRequested = QtCore.Signal(str)
+    openGraphPathRequested = QtCore.Signal(str)
+    revealGraphPathRequested = QtCore.Signal(str)
 
     def __init__(self, bridge: CoreBridge, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -29,6 +35,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.palette_model = OperationPaletteModel(parent=self)
         self.graph_model = OperationGraphModel(parent=self)
         self.history_model = OperationGraphHistoryModel(parent=self)
+        self.resource_model = GraphResultResourceModel(parent=self)
         self.active_object = QtWidgets.QLabel("-")
         self.active_object.setWordWrap(True)
         self.parameter_form = OperationParameterForm(self)
@@ -140,6 +147,45 @@ class OperationGraphPanel(QtWidgets.QWidget):
         inspector_layout.addRow("Manifests", self.result_manifests)
         inspector_layout.addRow("Readiness", self.result_readiness)
         inspector_layout.addRow("Retarget", self.retarget_diagnostics)
+        self.resource_view = QtWidgets.QTableView()
+        self.resource_view.setModel(self.resource_model)
+        self.resource_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.resource_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.resource_view.horizontalHeader().setStretchLastSection(True)
+        self.resource_view.verticalHeader().hide()
+        self.resource_view.setMinimumHeight(96)
+        inspector_layout.addRow("Resources", self.resource_view)
+        self.resource_details = QtWidgets.QLabel("No resource selected.")
+        self.resource_details.setWordWrap(True)
+        self.resource_details.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        inspector_layout.addRow("Details", self.resource_details)
+        path_buttons = QtWidgets.QHBoxLayout()
+        self.open_output_button = QtWidgets.QPushButton("Open Output")
+        self.reveal_output_button = QtWidgets.QPushButton("Reveal Output")
+        self.open_resource_button = QtWidgets.QPushButton("Open Selected")
+        self.reveal_resource_button = QtWidgets.QPushButton("Reveal Selected")
+        self.open_artifact_button = QtWidgets.QPushButton("Open Artifact")
+        self.open_manifest_button = QtWidgets.QPushButton("Open Manifest/Audit")
+        self.reveal_asset_dir_button = QtWidgets.QPushButton("Reveal Asset Dir")
+        for button in (
+            self.open_output_button,
+            self.reveal_output_button,
+            self.open_resource_button,
+            self.reveal_resource_button,
+            self.open_artifact_button,
+            self.open_manifest_button,
+            self.reveal_asset_dir_button,
+        ):
+            button.setEnabled(False)
+            path_buttons.addWidget(button)
+        self.open_output_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("output"))
+        self.reveal_output_button.clicked.connect(lambda _checked=False: self._emit_reveal_result_path("output"))
+        self.open_resource_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("selected"))
+        self.reveal_resource_button.clicked.connect(lambda _checked=False: self._emit_reveal_result_path("selected"))
+        self.open_artifact_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("artifact"))
+        self.open_manifest_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("manifest"))
+        self.reveal_asset_dir_button.clicked.connect(lambda _checked=False: self._emit_reveal_result_path("asset_dir"))
+        inspector_layout.addRow("Files", path_buttons)
         bridge_buttons = QtWidgets.QHBoxLayout()
         self.create_unity_bridge_button = QtWidgets.QPushButton("Unity Bridge")
         self.create_unreal_bridge_button = QtWidgets.QPushButton("Unreal Bridge")
@@ -183,6 +229,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.palette_view.selectionModel().selectionChanged.connect(lambda *_: self._palette_selection_changed())
         self.graph_view.selectionModel().selectionChanged.connect(lambda *_: self._graph_selection_changed())
         self.history_view.selectionModel().selectionChanged.connect(lambda *_: self._refresh_result_inspector())
+        self.resource_view.selectionModel().selectionChanged.connect(lambda *_: self._refresh_resource_selection())
 
     @QtCore.Slot()
     def refresh(self) -> None:
@@ -558,12 +605,228 @@ class OperationGraphPanel(QtWidgets.QWidget):
 
         self.result_readiness.setText(self._readiness_summary())
         self.retarget_diagnostics.setText(self._retarget_diagnostics_summary())
+        self.resource_model.set_rows(self.selected_result_resources())
+        if self.resource_model.rowCount() and not self.resource_view.selectionModel().hasSelection():
+            self.resource_view.selectRow(0)
+        self._refresh_resource_selection()
         can_bridge = self._manifest_engine_ready()
         self.create_unity_bridge_button.setEnabled(can_bridge)
         self.create_unreal_bridge_button.setEnabled(can_bridge)
         can_plan = self._manifest_payload is not None and bool(self._asset_dir)
         self.plan_unity_retarget_button.setEnabled(can_plan)
         self.plan_unreal_retarget_button.setEnabled(can_plan)
+
+    def _refresh_resource_selection(self) -> None:
+        self._refresh_resource_buttons()
+        self.resource_details.setText(_resource_detail_text(self.selected_result_resource()))
+
+    def _refresh_resource_buttons(self) -> None:
+        paths = self.selected_result_paths()
+        selected_resource = self.selected_result_resource()
+        self.open_output_button.setEnabled(bool(paths["output"]))
+        self.reveal_output_button.setEnabled(bool(paths["output"]))
+        self.open_resource_button.setEnabled(selected_resource is not None)
+        self.reveal_resource_button.setEnabled(selected_resource is not None)
+        self.open_artifact_button.setEnabled(bool(paths["artifact"]))
+        self.open_manifest_button.setEnabled(bool(paths["manifest"]))
+        self.reveal_asset_dir_button.setEnabled(bool(paths["asset_dir"]))
+
+    def selected_result_paths(self) -> dict[str, str]:
+        resources = self.selected_result_resources()
+        output_path = _first_resource_path(resources, "output")
+        artifact_path = _preferred_resource_path(resources, "artifact")
+        manifest_path = _preferred_resource_path(resources, "manifest")
+        asset_dir = _preferred_resource_path(resources, "asset_dir")
+        return {
+            "output": output_path,
+            "artifact": artifact_path,
+            "manifest": manifest_path,
+            "asset_dir": asset_dir,
+        }
+
+    def selected_result_resources(self) -> tuple[GraphResultResource, ...]:
+        history = self._selected_history_row()
+        details = history.details if history is not None else {}
+        artifact_paths, manifest_paths = self._selected_node_paths()
+        detail_manifest_paths = _string_list(details.get("manifest_paths"))
+        known_asset_dirs = {self._asset_dir, *_string_list(details.get("asset_dirs"))}
+        resources: list[GraphResultResource] = []
+        output_path = ""
+        if history is not None and history.output_path:
+            output_path = history.output_path
+            resources.append(
+                GraphResultResource(
+                    "output",
+                    output_path,
+                    "history",
+                    {
+                        "graph_id": history.graph_id,
+                        "status": history.status,
+                        "message": history.message,
+                        "duration_ms": round(history.duration_ms, 2),
+                    },
+                )
+            )
+        for path in artifact_paths:
+            kind = "asset_dir" if path in known_asset_dirs else "artifact"
+            resources.append(GraphResultResource(kind, path, "selected node", {"node_selection": True}))
+        resources.extend(
+            GraphResultResource("artifact", path, "history", {"graph_id": history.graph_id if history else ""})
+            for path in _string_list(details.get("artifact_paths"))
+        )
+        resources.extend(
+            GraphResultResource("manifest", path, "selected node", self._manifest_summary_details())
+            for path in manifest_paths
+        )
+        resources.extend(
+            GraphResultResource("manifest", path, "history", _history_audit_summary(details))
+            for path in detail_manifest_paths
+        )
+        if self._asset_dir:
+            resources.append(
+                GraphResultResource(
+                    "asset_dir",
+                    self._asset_dir,
+                    "selected object",
+                    {"manifest": self._asset_manifest_path()},
+                )
+            )
+        resources.extend(
+            GraphResultResource("asset_dir", path, "history", {"manifest": str(Path(path) / "asset_manifest.json")})
+            for path in _string_list(details.get("asset_dirs"))
+        )
+        bridge_details = _bridge_details_by_path(details)
+        resources.extend(
+            GraphResultResource("bridge", path, "history", bridge_details.get(path, {}))
+            for path in _string_list(details.get("bridge_paths"))
+        )
+        asset_manifest = self._asset_manifest_path()
+        if asset_manifest:
+            resources.append(
+                GraphResultResource("manifest", asset_manifest, "selected object", self._manifest_summary_details())
+            )
+        elif manifest_paths:
+            asset_manifest = manifest_paths[0]
+        elif detail_manifest_paths:
+            asset_manifest = detail_manifest_paths[0]
+        audit_details = details.get("audit_history")
+        if isinstance(audit_details, dict) and asset_manifest:
+            status = str(audit_details.get("status") or "audit")
+            preset = str(audit_details.get("preset") or "default")
+            resources.append(GraphResultResource("audit_history", asset_manifest, f"{preset}:{status}", dict(audit_details)))
+        resources.extend(self._manifest_resource_rows(asset_manifest, output_path=output_path))
+        return _unique_resources(resources)
+
+    def selected_result_resource(self) -> GraphResultResource | None:
+        selection = self.resource_view.selectionModel()
+        if selection is not None and selection.hasSelection():
+            return self.resource_model.row_at(selection.selectedRows()[0].row())
+        return self.resource_model.row_at(0)
+
+    @QtCore.Slot(str)
+    def _emit_open_result_path(self, key: str) -> None:
+        path = self._path_for_action(key)
+        if not path:
+            self.status.setText(f"No {key.replace('_', ' ')} path available.")
+            return
+        self.openGraphPathRequested.emit(path)
+
+    @QtCore.Slot(str)
+    def _emit_reveal_result_path(self, key: str) -> None:
+        path = self._path_for_action(key)
+        if not path:
+            self.status.setText(f"No {key.replace('_', ' ')} path available.")
+            return
+        self.revealGraphPathRequested.emit(path)
+
+    def _path_for_action(self, key: str) -> str:
+        if key == "selected":
+            resource = self.selected_result_resource()
+            return "" if resource is None else resource.path
+        return self.selected_result_paths().get(key, "")
+
+    def _asset_manifest_path(self) -> str:
+        if not self._asset_dir:
+            return ""
+        return str(Path(self._asset_dir) / "asset_manifest.json")
+
+    def _manifest_summary_details(self) -> dict[str, object]:
+        payload = self._manifest_payload
+        if payload is None:
+            return {}
+        validation = payload.get("validation") if isinstance(payload.get("validation"), dict) else {}
+        custom = payload.get("custom") if isinstance(payload.get("custom"), dict) else {}
+        report = validation.get("report")
+        provenance = payload.get("provenance")
+        return {
+            "asset_id": payload.get("asset_id"),
+            "validation": validation.get("status"),
+            "errors": validation.get("error_count"),
+            "warnings": validation.get("warning_count"),
+            "validation_issues": _validation_issue_text(report),
+            "validation_issue_list": _validation_issue_lines(report),
+            "artifacts": len(payload.get("artifacts", [])) if isinstance(payload.get("artifacts"), list) else 0,
+            "provenance_steps": len(provenance) if isinstance(provenance, list) else 0,
+            "latest_provenance": _provenance_text(provenance),
+            "provenance_step_list": _provenance_lines(provenance),
+            "audit_history": len(custom.get("audit_history", [])) if isinstance(custom.get("audit_history"), list) else 0,
+            "bridge_history": len(custom.get("engine_export_bridges", []))
+            if isinstance(custom.get("engine_export_bridges"), list)
+            else 0,
+        }
+
+    def _manifest_resource_rows(
+        self,
+        asset_manifest: str,
+        *,
+        output_path: str = "",
+    ) -> tuple[GraphResultResource, ...]:
+        payload = self._manifest_payload
+        if payload is None:
+            return ()
+        rows: list[GraphResultResource] = []
+        artifacts = payload.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                if not isinstance(artifact, dict):
+                    continue
+                role = str(artifact.get("role") or "")
+                path = str(artifact.get("path") or "")
+                if not path:
+                    continue
+                if role.startswith("engine.bridge."):
+                    target = role.removeprefix("engine.bridge.") or "engine"
+                    rows.append(
+                        GraphResultResource(
+                            "bridge",
+                            path,
+                            f"artifact:{target}",
+                            {"target_engine": target, "role": role},
+                        )
+                    )
+                elif role.startswith("texture."):
+                    rows.append(GraphResultResource("artifact", path, f"manifest:{role}", {"role": role}))
+                elif role.startswith("mesh.") and path != output_path:
+                    rows.append(GraphResultResource("artifact", path, f"manifest:{role}", {"role": role}))
+
+        custom = payload.get("custom") if isinstance(payload.get("custom"), dict) else {}
+        bridge_history = custom.get("engine_export_bridges") if isinstance(custom, dict) else None
+        if isinstance(bridge_history, list):
+            for item in bridge_history:
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("package_path") or "")
+                if path:
+                    target = str(item.get("target_engine") or "engine")
+                    rows.append(GraphResultResource("bridge", path, f"history:{target}", _bridge_summary(item)))
+        audit_history = custom.get("audit_history") if isinstance(custom, dict) else None
+        if isinstance(audit_history, list) and audit_history and asset_manifest:
+            latest = audit_history[-1]
+            if isinstance(latest, dict):
+                status = str(latest.get("status") or "audit")
+                preset = str(latest.get("preset") or "default")
+                rows.append(GraphResultResource("audit_history", asset_manifest, f"{preset}:{status}", _audit_summary(latest)))
+        return tuple(rows)
 
     def _selected_node_paths(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         row = self._selected_graph_row()
@@ -639,6 +902,219 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._retarget_target = ""
         self._retarget_report_payload = None
         self._retarget_after_report_payload = None
+
+
+def _first_resource_path(resources: tuple[GraphResultResource, ...], kind: str) -> str:
+    for resource in resources:
+        if resource.kind == kind:
+            return resource.path
+    return ""
+
+
+def _resource_detail_text(resource: GraphResultResource | None) -> str:
+    if resource is None:
+        return "No resource selected."
+    parts = [
+        f"{resource.kind} | {resource.source or 'result'}",
+        resource.path,
+    ]
+    for key, value in resource.details.items():
+        if value in (None, "", [], {}):
+            continue
+        label = key.replace("_", " ").title()
+        if isinstance(value, list):
+            lines = [str(item) for item in value if item]
+            if lines:
+                parts.append(f"{label}:\n" + "\n".join(f"- {item}" for item in lines))
+        else:
+            parts.append(f"{label}: {value}")
+    return "\n".join(parts)
+
+
+def _history_audit_summary(details: dict[str, object]) -> dict[str, object]:
+    audit = details.get("audit_history")
+    return dict(audit) if isinstance(audit, dict) else {}
+
+
+def _bridge_details_by_path(details: dict[str, object]) -> dict[str, dict[str, object]]:
+    bridge_history = details.get("bridge_history")
+    if not isinstance(bridge_history, list):
+        return {}
+    rows: dict[str, dict[str, object]] = {}
+    for item in bridge_history:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("package_path") or "")
+        if path:
+            rows[path] = _bridge_summary(item)
+    return rows
+
+
+def _bridge_summary(item: dict[str, object]) -> dict[str, object]:
+    return {
+        "target_engine": item.get("target_engine"),
+        "recommended_mcp_server": item.get("recommended_mcp_server"),
+        "recommended_tool": item.get("recommended_tool"),
+        "created_at": item.get("created_at"),
+        "direct_engine_call": item.get("direct_engine_call"),
+        "package_preview": _bridge_preview_lines(item),
+    }
+
+
+def _audit_summary(item: dict[str, object]) -> dict[str, object]:
+    return {
+        "preset": item.get("preset"),
+        "status": item.get("status"),
+        "error_count": item.get("error_count"),
+        "warning_count": item.get("warning_count"),
+        "info_count": item.get("info_count"),
+        "duration_seconds": item.get("duration_seconds"),
+        "started_at": item.get("started_at"),
+        "finished_at": item.get("finished_at"),
+        "audit_issue_list": _audit_issue_lines(item),
+    }
+
+
+def _bridge_preview_lines(item: dict[str, object]) -> list[str]:
+    fields = (
+        ("target_engine", item.get("target_engine")),
+        ("recommended_mcp_server", item.get("recommended_mcp_server")),
+        ("recommended_tool", item.get("recommended_tool")),
+        ("direct_engine_call", item.get("direct_engine_call")),
+        ("package_path", item.get("package_path")),
+    )
+    return [f"{key}={value}" for key, value in fields if value not in (None, "", [], {})]
+
+
+def _audit_issue_lines(report: dict[str, object]) -> list[str]:
+    issues = report.get("issues")
+    if not isinstance(issues, list):
+        return []
+    lines: list[str] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        severity = str(issue.get("severity") or "issue")
+        rule = str(issue.get("rule") or "")
+        code = str(issue.get("code") or "diagnostic")
+        message = str(issue.get("message") or "")
+        target = str(issue.get("target") or "")
+        prefix = f"{severity} {rule}:{code}" if rule else f"{severity} {code}"
+        if target:
+            prefix += f" [{target}]"
+        if message:
+            prefix += f": {message}"
+        lines.append(prefix)
+    return lines
+
+
+def _validation_issue_text(report: object) -> str:
+    if not isinstance(report, dict):
+        return ""
+    parts: list[str] = []
+    for bucket in ("errors", "warnings", "info"):
+        issues = report.get(bucket)
+        if not isinstance(issues, list) or not issues:
+            continue
+        codes = []
+        for issue in issues[:3]:
+            if not isinstance(issue, dict):
+                continue
+            code = str(issue.get("code") or issue.get("message") or "issue")
+            codes.append(code)
+        if codes:
+            parts.append(f"{bucket}:{', '.join(codes)}")
+    return " | ".join(parts)
+
+
+def _validation_issue_lines(report: object) -> list[str]:
+    if not isinstance(report, dict):
+        return []
+    lines: list[str] = []
+    for bucket in ("errors", "warnings", "info"):
+        issues = report.get(bucket)
+        if not isinstance(issues, list):
+            continue
+        label = {"errors": "error", "warnings": "warning", "info": "info"}[bucket]
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            code = str(issue.get("code") or "issue")
+            message = str(issue.get("message") or "")
+            location = str(issue.get("location") or "")
+            line = f"{label} {code}"
+            if location:
+                line += f" [{location}]"
+            if message:
+                line += f": {message}"
+            lines.append(line)
+    return lines
+
+
+def _provenance_text(provenance: object) -> str:
+    if not isinstance(provenance, list) or not provenance:
+        return ""
+    steps: list[str] = []
+    for item in provenance[-3:]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "step")
+        job_id = str(item.get("job_id") or "")
+        steps.append(f"{kind}({job_id[:8]})" if job_id else kind)
+    return " -> ".join(steps)
+
+
+def _provenance_lines(provenance: object) -> list[str]:
+    if not isinstance(provenance, list):
+        return []
+    lines: list[str] = []
+    for index, item in enumerate(provenance, start=1):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "step")
+        job_id = str(item.get("job_id") or "")
+        started = str(item.get("started_at") or "")
+        finished = str(item.get("finished_at") or "")
+        line = f"{index}. {kind}"
+        if job_id:
+            line += f" job={job_id[:12]}"
+        if started or finished:
+            line += f" {started} -> {finished}".rstrip()
+        lines.append(line)
+    return lines
+
+
+def _preferred_resource_path(resources: tuple[GraphResultResource, ...], kind: str) -> str:
+    selected = next((resource for resource in resources if resource.kind == kind and resource.source == "selected node"), None)
+    if selected is not None:
+        return selected.path
+    return _first_resource_path(resources, kind)
+
+
+def _unique_resources(resources: list[GraphResultResource]) -> tuple[GraphResultResource, ...]:
+    unique: list[GraphResultResource] = []
+    seen: set[tuple[str, str]] = set()
+    for resource in resources:
+        if not resource.path:
+            continue
+        key = (resource.kind, resource.path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(resource)
+    return tuple(unique)
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
+
+
+def _parent_dir(path_text: str) -> str:
+    if not path_text:
+        return ""
+    return str(Path(path_text).parent)
 
 
 def _engine_target_text(payload: dict[str, object]) -> str:

@@ -740,3 +740,210 @@ Verification so far:
 - Focused retarget comparison tests: 29 passed.
 - Qt suite: 59 passed.
 - Full project verification: 590 passed, 3 skipped.
+
+## 2026-06-01 Graph Result File Actions Slice
+
+Made graph outputs more like real pipeline resources by exposing file actions
+from the Qt result inspector.
+
+Book/roadmap principles applied:
+
+- Model/view rows should carry structured resource state instead of forcing the
+  UI to rediscover paths from labels.
+- Qt widgets emit user intent; shell/controllers own desktop integration.
+- Asset-pipeline tools need quick access to build products, manifests, audit
+  evidence, and side-effect artifacts.
+
+Added:
+
+- Structured graph-history details for output-related paths: artifact paths,
+  manifest paths, and asset directories discovered from side effects and
+  manifest artifacts.
+- Result-inspector buttons for opening outputs, opening artifacts, opening
+  manifest/audit files, revealing outputs, and revealing asset directories.
+- Main-window slots that route graph-result path actions through
+  `QDesktopServices`, with missing-path status messages.
+- Focused tests for history path payloads, inspector path signals/restoration,
+  and main-window open/reveal dispatch without launching the OS.
+
+Verification so far:
+
+- Focused graph result file-action tests: 32 passed.
+- Qt suite: 61 passed.
+- Full project verification: 592 passed, 3 skipped.
+
+## 2026-06-01 Graph Result Resource List Slice
+
+Deepened graph-result file actions into a model-backed resource browser inside
+the Qt operation-graph inspector.
+
+Book/roadmap principles applied:
+
+- Resource identity should be explicit in tools pipelines.
+- Qt model/view is the right shape for selectable artifact/manifest rows.
+- Desktop integration belongs in the shell while panels emit path intent.
+
+Added:
+
+- `GraphResultResourceModel` with kind/source/path columns for output meshes,
+  side-effect artifacts, manifests, and asset directories.
+- A resource table in the result inspector plus selected-resource open/reveal
+  buttons.
+- Categorization that prevents asset directories from being treated as mesh or
+  texture artifacts even when older node side-effect roles expose them through
+  artifact paths.
+- Main-window reveal routing that can use Windows Explorer file selection for
+  files while preserving folder-open fallback behavior.
+- Focused tests for the resource model, resource selection/open/reveal signals,
+  save/open restoration from history payloads, and main-window reveal dispatch.
+
+Verification so far:
+
+- Focused graph result resource-list tests: 33 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Bridge And Audit Resource Rows Slice
+
+Extended graph-result resources so manifest-backed handoff and validation
+evidence are visible in the same Qt inspector table as generated artifacts.
+
+Book/roadmap principles applied:
+
+- Engine handoff packages are first-class pipeline outputs, not side notes.
+- Audit evidence should travel with the asset resource and be restorable from
+  scene history.
+- Model/view resource rows make future drill-down inspectors possible without
+  changing graph evaluation payloads.
+
+Added:
+
+- Bridge resource rows from manifest `engine.bridge.*` artifacts and
+  `custom.engine_export_bridges[*].package_path`.
+- Audit-history resource rows from latest `custom.audit_history`, pointing back
+  to the manifest with preset/status source text.
+- History details for `bridge_paths` and latest audit summary so reopened graph
+  history can recreate bridge/audit resource rows.
+- Focused tests proving bridge/audit rows appear in the resource table and
+  restore from persisted graph-history payloads.
+
+Verification so far:
+
+- Focused bridge/audit resource tests: 33 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Graph Resource Metadata Drill-Down Slice
+
+Turned graph-result resource rows into small inspectable records rather than
+path-only launch targets.
+
+Book/roadmap principles applied:
+
+- Debug/profiling surfaces are product features in tools pipelines.
+- Manifest resources should carry enough context for users and MCP peers to
+  understand readiness without opening raw JSON first.
+- Qt model/view rows can expose compact details while the shell still owns file
+  open/reveal integration.
+
+Added:
+
+- Details payloads on `GraphResultResource` rows.
+- Resource details label in the operation-graph inspector.
+- Bridge metadata drill-down: target engine, recommended MCP server/tool,
+  created-at/direct-call fields when available.
+- Audit metadata drill-down: preset, status, counts, timing, and manifest path
+  context, restored from saved graph history.
+- Focused tests for model tooltips and live/restored bridge/audit details.
+
+Verification so far:
+
+- Focused graph resource drill-down tests: 33 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Manifest Validation Provenance Drill-Down Slice
+
+Extended selected manifest resource details so graph results show why an asset
+is ready or blocked and which operation trail produced it.
+
+Book/roadmap principles applied:
+
+- Manifest-driven pipelines should surface validation and provenance evidence
+  directly in editor tooling.
+- Debug surfaces should answer the first readiness question before a user opens
+  raw JSON.
+- Qt widgets can render compact summaries while preserving full manifest files
+  as the authoritative source.
+
+Added:
+
+- Manifest resource details for asset id, validation status/counts,
+  validation issue code summaries, artifact/provenance counts, audit/bridge
+  history counts, and latest provenance step chains.
+- Focused Qt coverage for validation issue summaries and provenance drill-down
+  in the graph-result resource inspector.
+
+Verification so far:
+
+- Focused manifest validation/provenance drill-down tests: 33 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Manifest Issue And Provenance Lists Slice
+
+Expanded selected manifest resource details from compact summaries into useful
+triage lists.
+
+Book/roadmap principles applied:
+
+- Tooling should expose build/validation evidence directly where users inspect
+  graph outputs.
+- Manifest data should remain authoritative, while Qt presents a readable
+  subset for quick decisions.
+- Provenance is part of the asset contract and should be visible beside
+  validation state.
+
+Added:
+
+- Validation issue lists grouped by manifest report severity, including code,
+  location, and message when available.
+- Ordered provenance step lists with operation kind, short job id, and timing
+  hints when available.
+- List-aware resource detail rendering in the Qt graph-result inspector.
+- Focused tests for issue-list and provenance-list rendering.
+
+Verification so far:
+
+- Focused manifest issue/provenance list tests: 33 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Audit And Bridge Resource Drill-Down Slice
+
+Completed the current graph-result resource drill-down loop by giving audit and
+bridge rows their own persisted list/detail views.
+
+Book/roadmap principles applied:
+
+- Engine handoff packages are pipeline resources and should expose the contract
+  a downstream MCP importer needs.
+- Audit history is not just a pass/fail badge; selected rows should show the
+  evidence that drove readiness decisions.
+- Scene-restored history should preserve enough context for debugging without
+  requiring a fresh audit or bridge package write.
+
+Added:
+
+- Persisted bridge package preview lines from `custom.engine_export_bridges`.
+- Persisted audit issue lines from latest `custom.audit_history`.
+- Selected-resource rendering for audit issue lists and bridge package preview
+  fields in the Qt graph-result inspector.
+- Focused tests proving live and restored bridge/audit rows keep the same
+  details.
+
+Verification so far:
+
+- Focused audit/bridge resource drill-down tests: 33 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.

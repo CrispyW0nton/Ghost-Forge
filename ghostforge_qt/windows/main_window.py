@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ghostforge_core.authoring import EditGraph, SOURCE_OPERATION_KINDS
 from ghostforge_core.manifest import ManifestBuilder, ProvenanceStep, read_manifest
@@ -193,6 +193,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.operation_graph_panel.auditGraphResultRequested.connect(self._audit_operation_graph_result)
         self.operation_graph_panel.createEngineBridgeRequested.connect(self._create_graph_result_engine_bridge)
         self.operation_graph_panel.planRetargetGraphRequested.connect(self._plan_graph_result_retarget)
+        self.operation_graph_panel.openGraphPathRequested.connect(self._open_graph_result_path)
+        self.operation_graph_panel.revealGraphPathRequested.connect(self._reveal_graph_result_path)
         self.job_controller.jobsChanged.connect(self._graph_jobs_changed)
         self.content_panel.fileActivated.connect(lambda path: self.import_mesh(Path(path)))
         self.theme_manager.themeChanged.connect(self.viewport.apply_theme)
@@ -429,6 +431,41 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.job_controller.cancel(job_id)
         self.statusBar().showMessage(f"Cancel requested for graph job {job_id[:12]}.")
+
+    @QtCore.Slot(str)
+    def _open_graph_result_path(self, path_text: str) -> bool:
+        path = Path(path_text)
+        if not path.exists():
+            self.statusBar().showMessage(f"Graph result path missing: {path}")
+            return False
+        opened = self._open_local_path_url(path)
+        if opened:
+            self.statusBar().showMessage(f"Opened graph result path: {path}")
+        else:
+            self.statusBar().showMessage(f"Could not open graph result path: {path}")
+        return opened
+
+    @QtCore.Slot(str)
+    def _reveal_graph_result_path(self, path_text: str) -> bool:
+        path = Path(path_text)
+        if not path.exists():
+            self.statusBar().showMessage(f"Graph result path missing: {path}")
+            return False
+        opened = self._reveal_local_path(path)
+        if opened:
+            self.statusBar().showMessage(f"Revealed graph result path: {path}")
+        else:
+            self.statusBar().showMessage(f"Could not reveal graph result path: {path}")
+        return opened
+
+    def _open_local_path_url(self, path: Path) -> bool:
+        return QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
+    def _reveal_local_path(self, path: Path) -> bool:
+        if path.is_file() and QtCore.QOperatingSystemVersion.currentType() == QtCore.QOperatingSystemVersion.OSType.Windows:
+            return QtCore.QProcess.startDetached("explorer.exe", [f"/select,{path}"])
+        target = path if path.is_dir() else path.parent
+        return self._open_local_path_url(target)
 
     @QtCore.Slot()
     def _audit_operation_graph_result(self) -> None:
