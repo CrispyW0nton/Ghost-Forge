@@ -1,19 +1,36 @@
 import React, { useState, useEffect } from 'react'
 import { useSceneStore, useSettingsStore } from '../store'
+import { useRuntimeStore } from '../store/v2'
 
 export default function StatusBar() {
   const { objects, selectedIds, activeJob, viewportMode } = useSceneStore()
   const { aiApiKey, aiModel } = useSettingsStore()
+  const { gpus, scheduler, sessions, refresh } = useRuntimeStore()
   const selected = objects.find(o => selectedIds.includes(o.id))
   const [time, setTime] = useState(() => new Date().toLocaleTimeString('en-US', { hour12: false }))
 
-  // Live clock — matrix style
   useEffect(() => {
     const tick = setInterval(() => {
       setTime(new Date().toLocaleTimeString('en-US', { hour12: false }))
     }, 1000)
     return () => clearInterval(tick)
   }, [])
+
+  // Periodic runtime refresh — slow enough to feel passive but quick
+  // enough that GPU/session state in the bar tracks reality. We avoid
+  // forcing a torch re-detection (`refreshGpus: false`) so the cached
+  // GPU listing is reused.
+  useEffect(() => {
+    refresh()
+    const tick = setInterval(() => refresh(), 5000)
+    return () => clearInterval(tick)
+  }, [refresh])
+
+  const cpuOnly = gpus?.cpu_only !== false
+  const gpuCount = gpus?.gpus?.length || 0
+  const sessionCount = Array.isArray(sessions) ? sessions.filter(s => s.loaded).length : 0
+  const cpuInUse = scheduler?.cpu_in_use ?? 0
+  const cpuTotal = scheduler?.cpu_concurrency ?? 0
 
   return (
     <div style={{
@@ -70,6 +87,43 @@ export default function StatusBar() {
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
+      {/* Runtime indicators (P10) */}
+      <Stat
+        label="GPU"
+        value={cpuOnly ? 'CPU' : `${gpuCount}×CUDA`}
+        valueColor={cpuOnly ? 'var(--gf-text-3)' : 'var(--gf-cyan)'}
+        glow={!cpuOnly}
+        title={
+          gpus && !cpuOnly
+            ? gpus.gpus.map(g => `${g.name} (${(g.vram_mb/1024).toFixed(1)}GB)`).join('\n')
+            : 'No CUDA GPU detected — workers fall back to CPU'
+        }
+      />
+
+      {cpuTotal > 0 && (
+        <Stat
+          label="CPU"
+          value={`${cpuInUse}/${cpuTotal}`}
+          valueColor={cpuInUse > 0 ? 'var(--gf-neon)' : 'var(--gf-text-3)'}
+          title="Scheduler CPU lane occupancy"
+        />
+      )}
+
+      {sessionCount > 0 && (
+        <Stat
+          label="MEM"
+          value={`${sessionCount} loaded`}
+          valueColor="var(--gf-cyan)"
+          glow
+          title={
+            sessions
+              .filter(s => s.loaded)
+              .map(s => `${s.name} (idle ${Math.round(s.idle_seconds || 0)}s)`)
+              .join('\n')
+          }
+        />
+      )}
+
       {/* View mode */}
       <Stat
         label="VIEW"
@@ -117,9 +171,13 @@ export default function StatusBar() {
   )
 }
 
-function Stat({ label, value, valueColor, glow }) {
+function Stat({ label, value, valueColor, glow, title }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+    <div
+      title={title}
+      style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+               cursor: title ? 'help' : 'default' }}
+    >
       <span style={{ color: 'var(--gf-text-4)' }}>{label}:</span>
       <span style={{
         color: valueColor || 'var(--gf-text-2)',

@@ -1,11 +1,13 @@
 node_modules/
 outputs/
 uploads/
+data/
 __pycache__/
 *.pyc
 *.pyo
 .env
 dist/
+out/
 .DS_Store
 *.log
 api/__pycache__/

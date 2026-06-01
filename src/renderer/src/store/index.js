@@ -39,19 +39,25 @@ export const useSettingsStore = create(
 )
 
 // ─── Scene store (runtime, not persisted) ─────────────────────────────────────
+//
+// Each scene object can carry a ``graphId`` linking it to an authoring
+// EditGraph. Transform gizmos in the viewport call ``writeTransformToGraph``
+// to persist the manipulated translate/rotate/scale into a transform
+// modifier node on that graph, so the same edit shows up in the MODS
+// tab and round-trips through the evaluator.
 export const useSceneStore = create((set, get) => ({
-  // Loaded objects in the scene
-  objects: [],           // [{ id, name, type, mesh, visible, selected, uvDone, textureDone }]
-  selectedIds: [],       // currently selected object ids
+  objects: [],
+  selectedIds: [],
 
-  // Active job tracking
-  activeJob: null,       // { id, type, status, progress, stage }
+  activeJob: null,
 
-  // Viewport state
-  viewportMode: '3d',    // '3d' | 'uv' | 'texture'
-  cameraPreset: 'persp', // 'persp' | 'front' | 'side' | 'top'
+  viewportMode: '3d',
+  cameraPreset: 'persp',
 
-  // Scene actions
+  // Gizmo + binding
+  transformMode: 'translate',  // 'translate' | 'rotate' | 'scale' | null (off)
+  transformSpace: 'world',     // 'world' | 'local'
+
   addObject: (obj) => set(s => ({ objects: [...s.objects, obj] })),
   removeObject: (id) => set(s => ({ objects: s.objects.filter(o => o.id !== id) })),
   updateObject: (id, patch) => set(s => ({
@@ -70,6 +76,59 @@ export const useSceneStore = create((set, get) => ({
   clearActiveJob: ()     => set({ activeJob: null }),
   setViewportMode: (m)   => set({ viewportMode: m }),
   setCameraPreset: (p)   => set({ cameraPreset: p }),
+
+  setTransformMode:  (m) => set({ transformMode: m }),
+  setTransformSpace: (s) => set({ transformSpace: s }),
+
+  bindGraphToObject: (objectId, graphId) =>
+    set(s => ({
+      objects: s.objects.map(o =>
+        o.id === objectId ? { ...o, graphId } : o
+      ),
+    })),
+
+  // Persist a transform delta into both the local object and (if bound)
+  // the linked authoring graph. Call from the gizmo's onChange/onPointerUp.
+  writeTransformToGraph: async (objectId, transform) => {
+    const obj = get().objects.find(o => o.id === objectId)
+    if (!obj) return
+
+    set(s => ({
+      objects: s.objects.map(o =>
+        o.id === objectId ? { ...o, transform: { ...o.transform, ...transform } } : o
+      ),
+    }))
+
+    if (!obj.graphId) return
+
+    // Lazy import to avoid a hard dep cycle with the authoring store.
+    try {
+      const { Authoring } = await import('../modules/apiV2.js')
+      const graph = await Authoring.getGraph(obj.graphId)
+      const existing = (graph?.nodes || []).find(
+        n => n.kind === 'transform' && n.label === '__viewport_gizmo__'
+      )
+      const params = {
+        translate: transform.translate || [0, 0, 0],
+        rotate_euler_deg: transform.rotate_euler_deg || [0, 0, 0],
+        scale: transform.scale || 1.0,
+      }
+      if (existing) {
+        await Authoring.updateNode(obj.graphId, existing.id, { params })
+      } else {
+        await Authoring.appendNode(obj.graphId, {
+          kind: 'transform',
+          label: '__viewport_gizmo__',
+          params,
+        })
+      }
+    } catch (err) {
+      // Surface as a non-fatal warning via the chat store.
+      try {
+        useChatStore.getState().setError(`viewport gizmo write failed: ${err.message || err}`)
+      } catch {}
+    }
+  },
 }))
 
 // ─── Chat store (AI conversation) ─────────────────────────────────────────────
@@ -92,8 +151,8 @@ export const useUIStore = create((set) => ({
   rightPanelOpen:   true,
   chatPanelOpen:    true,
   settingsOpen:     false,
-  activeLeftTab:    'scene',     // 'scene' | 'tools' | 'generate'
-  activeRightTab:   'properties',// 'properties' | 'uv' | 'texture'
+  activeLeftTab:    'scene',     // 'scene' | 'tools' | 'generate' | 'forge'
+  activeRightTab:   'properties',// 'properties' | 'uv' | 'texture' | 'modifiers' | 'audit' | 'engine'
 
   toggleLeftPanel:  () => set(s => ({ leftPanelOpen: !s.leftPanelOpen })),
   toggleRightPanel: () => set(s => ({ rightPanelOpen: !s.rightPanelOpen })),

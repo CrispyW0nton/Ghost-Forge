@@ -1,109 +1,164 @@
-# 👻🔥 GhostForge
+# Ghost Forge
 
-**Open source 3D creation suite with integrated AI partnership.**
+Ghost Forge is an open-source, AI-native 3D creation suite for generating, editing, validating, and handing game-ready assets to modern engines.
 
-GhostForge combines UV unwrapping, texture generation, image-to-3D mesh generation, and a built-in AI co-creator into one unified workspace. Enter your own API key and your chosen AI works *alongside* you — it can see your scene, understand your workflow, and guide you in real time.
+The long-term goal is a universal 3D modeling and content-generation environment that can grow toward Blender, Maya, ZBrush, and RizomUV-class workflows while keeping an advantage those tools were not built around: AI automation, provenance, validation, and engine handoff through MCP.
 
-> Based on [Modly](https://github.com/lightningpixel/modly) by Lightning Pixel (MIT License)
+## Product Goal
 
----
+Ghost Forge should become:
 
-## Vision
+- a universal 3D modeling suite, not a KOTOR-specific tool,
+- a Qt/PySide6 desktop editor with a robust viewport and dockable production UI,
+- an AI-assisted asset foundry for text/image-to-3D, texturing, repair, retopo, UVs, and variants,
+- a manifest-driven pipeline where every generated or edited asset keeps provenance and audit history,
+- an MCP-capable tool server for vibe-coding games and automated asset workflows,
+- an engine bridge producer for Unity-MCP-Ghost and Unreal-MCP-Ghost.
 
-> *"The power should be with the people, not the companies."*
+Ghost Forge is not trying to clone Blender or Maya overnight. Its credible wedge is an AI-native asset pipeline that can generate rough assets, expose honest capability gates, help artists inspect and correct outputs, and ship audited engine-ready packages.
 
-GhostForge is the open-source answer to a suite of tools that should never have been locked behind corporate paywalls:
+## Current Architecture
 
-| Replaces | With |
-|---------|------|
-| RizomUV | xatlas (ABF++ UV unwrapping) |
-| Substance Painter | Stable Diffusion AI texturing |
-| Modly / Hunyuan3D | Image → 3D mesh generation |
-| Maya/Blender viewport | React Three Fiber 3D workspace |
-| No equivalent existed | AI partner with full scene context |
+| Layer | Purpose |
+| --- | --- |
+| `ghostforge_core` | Shared Python domain layer: jobs, workers, manifests, audits, authoring graphs, slices, engine handoff, knowledge base |
+| `ghostforge_qt` | PySide6 desktop editor: project browser, scene model, viewport foundation, modeling tools, themes |
+| `ghostforge_mcp` | MCP server for agent-callable generation, audit, slice, and engine-handoff workflows |
+| `ghostforge_app` | Flask HTTP bridge retained during the Qt migration |
+| legacy Electron/React | Earlier prototype UI retained as reference until Qt reaches parity |
+| `knowledge_base` | Project memory, roadmap, audits, and book-derived development rules |
 
----
+## What Works Now
 
-## Features
+- PySide6 desktop shell with project/content browser, theme system, scene outliner, viewport foundation, and modeling dock.
+- CPU-projected 3D viewport with mesh preview, camera presets, display modes, transform type-in, object/sub-object picking, and selection highlighting.
+- Universal mesh tooling for cleanup, normals, weld, smooth, subdivide, decimate, recenter, material assignment, selected delete/weld/flip normals, and operation history.
+- Editable mesh core foundation with stable vertex/edge/face IDs, adjacency, validation, connected components, and delta undo/redo.
+- Worker registry with honest probes for TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, SyncMVD, silhouette image-to-3D, and stubs.
+- Hosted Tripo AI text-to-3D worker exposed as `tripo_api`, gated by server-side credentials.
+- MCP tools for worker probing, text/image generation, texture/refine jobs, audits, vertical slices, edit graphs, retarget planning, and Unity/Unreal handoff.
+- Asset manifests with geometry summaries, provenance, license, concept citations, validation summaries, engine targets, and bridge package history.
+- Offline export bridge packages for Unity-MCP-Ghost and Unreal-MCP-Ghost.
+- Knowledge base and roadmap grounded in Qt, graphics math, game-engine architecture, MCP, and DCC competitor research.
 
-### ✅ Built (Phase 1)
-- **Automatic UV unwrapping** — xatlas ABF++ algorithm, production quality
-- **Procedural texture generation** — instant, no GPU needed, keyword-driven
-- **AI texture generation** — Stable Diffusion via diffusers
-- **Reference image style transfer** — SD img2img pipeline
-- **Image-to-3D** — Hunyuan3D / TripoSG / TRELLIS extension system (from Modly)
-- **3D viewport** — React Three Fiber + OrbitControls
-- **AI chat panel** — streaming, real-time, scene-aware
-- **API key settings** — OpenAI / Anthropic / Ollama / any OpenAI-compatible
-- **Scene hierarchy** — import, list, select, remove objects
-- **Properties panel** — UV controls, texture controls, per-object settings
+## AI Content Generation
 
-### 🔜 Roadmap (Phase 2+)
-- PBR texture painter (paint directly on mesh)
-- Auto-rigging (RigNet / AccuRIG-equivalent)
-- Sculpting tools (OpenVDB / libigl)
-- MCP tool calls (AI can directly trigger unwrap/texture/export)
-- Extension system (install AI models from GitHub like Modly)
-- Packaged desktop builds (Windows / Linux / macOS via Electron)
+Ghost Forge supports both local/optional model workers and hosted providers behind the same worker contract.
 
----
+Tripo AI text-to-3D uses the official Tripo OpenAPI task flow:
 
-## Stack
+- submit a task,
+- poll for completion,
+- download `model`, `base_model`, or `pbr_model`,
+- write the result into a manifest-backed asset directory.
 
-| Layer | Technology |
-|-------|-----------|
-| Desktop shell | Electron 33 |
-| UI framework | React 18 + Vite + Tailwind |
-| 3D viewport | React Three Fiber + Three.js |
-| State management | Zustand (persisted settings) |
-| Python backend | Flask + FastAPI |
-| UV unwrapping | xatlas (ABF++ + RBPF packing) |
-| Mesh processing | trimesh + PyMeshLab |
-| AI texturing | Stable Diffusion via diffusers |
-| AI chat | OpenAI-compatible streaming API |
+Set one of these environment variables before running the app or MCP server:
 
----
+```powershell
+$env:GHOSTFORGE_TRIPO_API_KEY = "your-key"
+# or
+$env:TRIPO_API_KEY = "your-key"
+```
+
+Do not put API keys in project files or request extras. Ghost Forge rejects inline key fields and redacts secret-shaped values before manifest writes.
+
+## MCP And Engine Handoff
+
+Ghost Forge can run as an MCP server for game-development agents. A typical game asset workflow is:
+
+1. Probe workers with `list_worker_capabilities`.
+2. Generate a smart mesh with `submit_text_to_3d` or a vertical slice asset using `strategy="text_to_3d"`.
+3. Pass smart mesh settings such as texture/PBR, smart low-poly, quad, face limit, UV export, and geometry quality.
+4. Wait for the job and inspect the generated manifest.
+5. Audit or retarget for Unity or Unreal.
+6. Create `ghostforge_bridge_unity.json` or `ghostforge_bridge_unreal.json`, or call `send_to_unity` / `send_to_unreal` when an engine adapter is configured.
+
+Unity-MCP-Ghost and Unreal-MCP-Ghost remain responsible for editor-specific import, placement, validation, and repair inside the game project. Ghost Forge owns asset generation, provenance, audit state, and bridge package creation.
+
+## Knowledge Base
+
+The `knowledge_base/` folder is part of the source of truth for development. Before major work, review:
+
+- `knowledge_base/README.md`
+- `knowledge_base/crosswalks/ghostforge_development_bible.md`
+- `knowledge_base/roadmap/dcc_competitor_roadmap.md`
+- `knowledge_base/roadmap/tripo_mcp_engine_workflow.md`
+- the matching subsystem note under `knowledge_base/book_notes/`
+
+The local book library used for future scans lives outside the repo at:
+
+```text
+C:\Users\NewAdmin\Documents\Academy of Art University\Books
+```
+
+Book notes in this repo are summaries and project-specific applications, not copied book content.
+
+## Roadmap
+
+Near-term slices:
+
+1. Renderer upgrade: OpenGL/wgpu-backed viewport behind the current renderer interface.
+2. Transform gizmo: move/rotate/scale handles, snapping, pivot/orientation modes.
+3. UV workspace MVP: 2D UV viewport, seam marking, unwrap, pack, checker, distortion overlay.
+4. Material/texture inspector: PBR slots, texture previews, provenance, material assignment.
+5. Operation/modifier graph: core-owned non-destructive stack for modeling and repair.
+6. AI worker manager: dependency probes, install/cache UI, hosted provider credentials, sample generation tests.
+7. Hosted Tripo generation: smart mesh presets, vertical-slice generation extras, Unity/Unreal bridge routing.
+8. Sculpt/retopo foundation: brushes, masking, remesh/decimate/retopo, projection, baking.
+9. Animation and rigging: skeletons, skinning, constraints, timeline, retargeting.
+10. Pipeline extensibility: USD/FBX where possible, Python scripting, plugin manifests, batch/headless jobs.
 
 ## Quick Start
 
-```bash
-# 1. Install Python dependencies
-pip install xatlas trimesh flask flask-cors pillow numpy scipy open3d
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install diffusers transformers accelerate
+Install the Python package in editable mode:
 
-# 2. Start Python backend
-cd api && python3 app.py
-
-# 3. Install JS dependencies
-npm install
-
-# 4. Run the app (web preview)
-npx vite --config vite.web.config.js
-
-# 5. Or package as desktop app
-npm run package
+```powershell
+python -m pip install -e .
 ```
 
----
+Run the core tests:
 
-## AI Integration
+```powershell
+python -m pytest
+```
 
-GhostForge uses a fully open API key system. In Settings, enter:
-- Your API key (OpenAI, Anthropic, Together AI, or any provider)
-- Your chosen model (GPT-4o, Claude, Llama, Mistral, etc.)
-- The API base URL (works with Ollama for 100% local/offline AI)
+Run the MCP server:
 
-The AI receives your **full scene context** automatically — which models are loaded, which are selected, UV and texture status. It's not "ask AI to do everything" — it's a genuine creative partner that can see what you're working on and help you make decisions.
+```powershell
+python -m ghostforge_mcp
+```
 
----
+Run the Qt desktop editor:
+
+```powershell
+python -m ghostforge_qt.main
+```
+
+Optional extras:
+
+```powershell
+python -m pip install -e ".[qt]"
+python -m pip install -e ".[mcp]"
+python -m pip install -e ".[mesh]"
+python -m pip install -e ".[ai]"
+```
+
+## Verification Status
+
+Latest full Python verification:
+
+```text
+553 passed, 3 skipped
+```
+
+Frontend/Electron work still requires the older Node pipeline. The Qt editor is the forward architecture.
 
 ## Credits
 
-- **xatlas** — https://github.com/jpcy/xatlas (MIT)
-- **trimesh** — https://github.com/mikedh/trimesh (MIT)
-- **diffusers** — https://github.com/huggingface/diffusers (Apache 2.0)
-- **Modly** — https://github.com/lightningpixel/modly (MIT) — image-to-3D extension system
-- **React Three Fiber** — https://github.com/pmndrs/react-three-fiber (MIT)
-- **Three.js** — https://threejs.org (MIT)
-- **Zustand** — https://github.com/pmndrs/zustand (MIT)
+- Based in part on Modly by Lightning Pixel, MIT License: https://github.com/lightningpixel/modly
+- xatlas: https://github.com/jpcy/xatlas
+- trimesh: https://github.com/mikedh/trimesh
+- diffusers: https://github.com/huggingface/diffusers
+- React Three Fiber: https://github.com/pmndrs/react-three-fiber
+- Three.js: https://threejs.org
+- Zustand: https://github.com/pmndrs/zustand

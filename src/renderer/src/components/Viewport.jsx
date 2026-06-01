@@ -1,6 +1,6 @@
-import React, { Suspense, useRef, useState, useEffect, useCallback } from 'react'
+import React, { Suspense, useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls, useGLTF, useProgress, Html } from '@react-three/drei'
+import { OrbitControls, TransformControls, useGLTF, useProgress, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
@@ -246,9 +246,71 @@ function PlyModel({ file, onLoaded }) {
   return <primitive object={mesh} />
 }
 
+// ─── Transform gizmo for the selected scene object ───────────────────────────
+//
+// Wraps the target group in a drei <TransformControls>. On drag end we
+// snapshot translate/rotate/scale and call writeTransformToGraph on the
+// scene store, which (a) updates the local object record and (b) writes
+// the values into the object's bound EditGraph so the same edit shows up
+// in the MODS tab.
+function TransformGizmo({ target, objectId }) {
+  const controlsRef = useRef()
+  const orbit = useThree(state => state.controls)
+  const transformMode = useSceneStore(s => s.transformMode)
+  const transformSpace = useSceneStore(s => s.transformSpace)
+  const writeTransformToGraph = useSceneStore(s => s.writeTransformToGraph)
+
+  // Disable orbit while dragging the gizmo so the camera doesn't tumble.
+  useEffect(() => {
+    const tc = controlsRef.current
+    if (!tc) return
+    const onDragChange = (event) => {
+      if (orbit) orbit.enabled = !event.value
+    }
+    const onObjectChange = () => {
+      if (!target.current) return
+      const t = target.current
+      const translate = [t.position.x, t.position.y, t.position.z]
+      const rotate_euler_deg = [
+        THREE.MathUtils.radToDeg(t.rotation.x),
+        THREE.MathUtils.radToDeg(t.rotation.y),
+        THREE.MathUtils.radToDeg(t.rotation.z),
+      ]
+      const scaleArr = [t.scale.x, t.scale.y, t.scale.z]
+      const uniform = scaleArr[0] === scaleArr[1] && scaleArr[1] === scaleArr[2]
+      const transform = {
+        translate,
+        rotate_euler_deg,
+        scale: uniform ? scaleArr[0] : scaleArr,
+      }
+      writeTransformToGraph(objectId, transform)
+    }
+    tc.addEventListener('dragging-changed', onDragChange)
+    tc.addEventListener('mouseUp', onObjectChange)
+    return () => {
+      tc.removeEventListener('dragging-changed', onDragChange)
+      tc.removeEventListener('mouseUp', onObjectChange)
+    }
+  }, [orbit, target, objectId, writeTransformToGraph])
+
+  if (!target.current || !transformMode) return null
+  return (
+    <TransformControls
+      ref={controlsRef}
+      object={target.current}
+      mode={transformMode}
+      space={transformSpace}
+      size={0.8}
+    />
+  )
+}
+
+
 // ─── Universal scene object dispatcher ───────────────────────────────────────
 function SceneObject({ obj }) {
-  const { updateObject } = useSceneStore()
+  const { updateObject, selectedIds, selectObject } = useSceneStore()
+  const groupRef = useRef()
+  const isSelected = selectedIds.includes(obj.id)
   if (!obj.visible) return null
 
   const handleLoaded = useCallback((stats) => {
@@ -257,19 +319,49 @@ function SceneObject({ obj }) {
     }
   }, [obj.id])
 
-  // If we have a previewUrl (from completed job), use GLB
+  // Apply any transform stashed on the object (e.g. from a previous gizmo
+  // drag, or the initial values pulled from a bound graph). The gizmo
+  // updates the live three object directly; this keeps state durable
+  // when objects unmount and remount (e.g. after a job completes).
+  useEffect(() => {
+    const g = groupRef.current
+    if (!g || !obj.transform) return
+    const t = obj.transform
+    if (Array.isArray(t.translate)) {
+      g.position.set(t.translate[0] || 0, t.translate[1] || 0, t.translate[2] || 0)
+    }
+    if (Array.isArray(t.rotate_euler_deg)) {
+      g.rotation.set(
+        THREE.MathUtils.degToRad(t.rotate_euler_deg[0] || 0),
+        THREE.MathUtils.degToRad(t.rotate_euler_deg[1] || 0),
+        THREE.MathUtils.degToRad(t.rotate_euler_deg[2] || 0),
+      )
+    }
+    if (typeof t.scale === 'number') {
+      g.scale.setScalar(t.scale)
+    } else if (Array.isArray(t.scale)) {
+      g.scale.set(t.scale[0] || 1, t.scale[1] || 1, t.scale[2] || 1)
+    }
+  }, [obj.transform])
+
+  const handlePointerDown = useCallback((e) => {
+    e.stopPropagation()
+    selectObject(obj.id, e.shiftKey)
+  }, [obj.id, selectObject])
+
+  // Render the appropriate model into a wrapper group that the gizmo can
+  // attach to. The wrapper carries the position/rotation/scale we'll
+  // ultimately push into the modifier graph.
+  let body = null
   if (obj.previewUrl) {
-    return (
+    body = (
       <Suspense fallback={<ModelLoader />}>
         <GltfModel url={obj.previewUrl} onLoaded={handleLoaded} />
       </Suspense>
     )
-  }
-
-  if (!obj.file) {
-    // Placeholder box
-    return (
-      <group>
+  } else if (!obj.file) {
+    body = (
+      <>
         <mesh>
           <boxGeometry args={[1,1,1]} />
           <meshStandardMaterial color="#0A1A0A" emissive="#39FF14" emissiveIntensity={0.08} roughness={0.7} metalness={0.4} />
@@ -278,27 +370,41 @@ function SceneObject({ obj }) {
           <boxGeometry args={[1.003,1.003,1.003]} />
           <meshBasicMaterial color="#39FF14" wireframe opacity={0.5} transparent />
         </mesh>
-      </group>
+      </>
     )
+  } else {
+    const ext = obj.file.name?.split('.').pop().toLowerCase()
+    if (ext === 'glb' || ext === 'gltf') {
+      body = <GltfModelFromFile file={obj.file} onLoaded={handleLoaded} />
+    } else if (ext === 'obj') {
+      body = <ObjModel file={obj.file} onLoaded={handleLoaded} />
+    } else if (ext === 'stl') {
+      body = <StlModel file={obj.file} onLoaded={handleLoaded} />
+    } else if (ext === 'ply') {
+      body = <PlyModel file={obj.file} onLoaded={handleLoaded} />
+    } else {
+      body = (
+        <mesh>
+          <boxGeometry args={[1,1,1]} />
+          <meshStandardMaterial color="#1A0A0A" emissive="#FF2D55" emissiveIntensity={0.1} />
+        </mesh>
+      )
+    }
   }
 
-  const ext = obj.file.name?.split('.').pop().toLowerCase()
-
-  if (ext === 'glb' || ext === 'gltf') {
-    // Use a stable memoised blob URL — revoked when component unmounts
-    return (
-      <GltfModelFromFile file={obj.file} onLoaded={handleLoaded} />
-    )
-  }
-  if (ext === 'obj') return <ObjModel file={obj.file} onLoaded={handleLoaded} />
-  if (ext === 'stl') return <StlModel file={obj.file} onLoaded={handleLoaded} />
-  if (ext === 'ply') return <PlyModel file={obj.file} onLoaded={handleLoaded} />
-
-  // Fallback
   return (
-    <group>
-      <mesh><boxGeometry args={[1,1,1]} /><meshStandardMaterial color="#1A0A0A" emissive="#FF2D55" emissiveIntensity={0.1} /></mesh>
-    </group>
+    <>
+      <group ref={groupRef} onPointerDown={handlePointerDown}>
+        {body}
+        {isSelected && (
+          <mesh>
+            <boxGeometry args={[1.05, 1.05, 1.05]} />
+            <meshBasicMaterial color="#39FF14" wireframe opacity={0.35} transparent />
+          </mesh>
+        )}
+      </group>
+      {isSelected && <TransformGizmo target={groupRef} objectId={obj.id} />}
+    </>
   )
 }
 
@@ -417,6 +523,48 @@ function CameraPresets({ orbitRef }) {
   )
 }
 
+// ─── Gizmo mode pills (top right, under camera presets) ──────────────────────
+function GizmoModeBar() {
+  const transformMode = useSceneStore(s => s.transformMode)
+  const setTransformMode = useSceneStore(s => s.setTransformMode)
+  const transformSpace = useSceneStore(s => s.transformSpace)
+  const setTransformSpace = useSceneStore(s => s.setTransformSpace)
+  const selectedIds = useSceneStore(s => s.selectedIds)
+  if (selectedIds.length === 0) return null
+  const modes = [
+    ['T', 'translate'],
+    ['R', 'rotate'],
+    ['S', 'scale'],
+    ['—', null],
+  ]
+  return (
+    <Html style={{ position: 'absolute', top: 36, right: 10 }} prepend>
+      <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+        {modes.map(([label, m]) => {
+          const active = transformMode === m
+          return (
+            <button key={label} onClick={() => setTransformMode(m)} style={{
+              padding: '3px 8px', fontSize: 8, fontFamily: 'monospace', letterSpacing: '0.1em',
+              background: active ? 'rgba(57,255,20,0.1)' : 'rgba(1,3,1,0.85)',
+              border: `1px solid ${active ? '#00CC0A' : '#0C200C'}`,
+              borderRadius: 2,
+              color: active ? '#39FF14' : '#245924',
+              cursor: 'pointer',
+              textShadow: active ? '0 0 5px #39FF14' : 'none',
+              boxShadow: active ? '0 0 8px #39FF1425' : 'none',
+            }}>{label}</button>
+          )
+        })}
+        <button onClick={() => setTransformSpace(transformSpace === 'world' ? 'local' : 'world')} style={{
+          padding: '3px 8px', fontSize: 8, fontFamily: 'monospace', letterSpacing: '0.1em',
+          background: 'rgba(1,3,1,0.85)', border: '1px solid #0C200C', borderRadius: 2,
+          color: '#39FF14', cursor: 'pointer', marginLeft: 4,
+        }}>{transformSpace.toUpperCase()}</button>
+      </div>
+    </Html>
+  )
+}
+
 // ─── View mode label (top left) ───────────────────────────────────────────────
 function ViewportHUD({ mode }) {
   const labels = { '3d': 'PERSPECTIVE_VIEW', 'uv': 'UV_EDITOR', 'texture': 'TEXTURE_PAINT' }
@@ -487,6 +635,7 @@ function SceneContent({ objects, viewportGrid, viewportWireframe, orbitRef }) {
         screenSpacePanning={false}
       />
       <CameraPresets orbitRef={orbitRef} />
+      <GizmoModeBar />
       <CoordHUD />
     </>
   )

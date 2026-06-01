@@ -1,0 +1,51 @@
+[project]
+name = "ghostforge"
+version = "0.1.0"
+description = "Dual-mode AI asset foundry: desktop creator app plus MCP-ready shared asset core"
+requires-python = ">=3.10"
+dependencies = [
+  "flask",
+  "flask-cors",
+  "numpy",
+  "pillow",
+  "pydantic>=2",
+  "pytest",
+  "trimesh",
+  "werkzeug",
+]
+
+[project.optional-dependencies]
+mesh = [
+  "open3d",
+  "xatlas",
+]
+ai = [
+  "accelerate",
+  "diffusers",
+  "torch",
+  "transformers",
+]
+mcp = [
+  "mcp>=1.2",
+]
+kb = [
+  "lancedb",
+  "open-clip-torch",
+  "torch",
+]
+qt = [
+  "PySide6>=6.6",
+]
+
+[project.scripts]
+ghostforge-mcp = "ghostforge_mcp.__main__:main"
+ghostforge-qt = "ghostforge_qt.main:main"
+
+[tool.pytest.ini_options]
+testpaths = [
+  "ghostforge_core/tests",
+  "ghostforge_mcp/tests",
+  "ghostforge_app/tests",
+  "ghostforge_qt/tests",
+]
+pythonpath = ["."]
