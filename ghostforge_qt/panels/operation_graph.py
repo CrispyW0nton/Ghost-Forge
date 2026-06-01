@@ -20,6 +20,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
     evaluateRequested = QtCore.Signal()
     cancelGraphJobRequested = QtCore.Signal(str)
     auditGraphResultRequested = QtCore.Signal()
+    createEngineBridgeRequested = QtCore.Signal(str)
+    planRetargetGraphRequested = QtCore.Signal(str)
 
     def __init__(self, bridge: CoreBridge, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -49,6 +51,11 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._active_audit_job_id: str | None = None
         self._last_result: EvaluationResult | None = None
         self._last_payload: dict[str, object] | None = None
+        self._manifest_payload: dict[str, object] | None = None
+        self._retarget_report_payload: dict[str, object] | None = None
+        self._retarget_after_report_payload: dict[str, object] | None = None
+        self._retarget_target: str = ""
+        self._asset_dir: str = ""
         self._operations_by_kind: dict[str, OperationRow] = {}
         self._build()
         self.refresh()
@@ -109,6 +116,52 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.history_view.verticalHeader().hide()
         root.addWidget(QtWidgets.QLabel("Result History"))
         root.addWidget(self.history_view, 1)
+
+        inspector = QtWidgets.QGroupBox("Result Inspector")
+        inspector_layout = QtWidgets.QFormLayout(inspector)
+        self.result_summary = QtWidgets.QLabel("No graph result selected.")
+        self.result_output = QtWidgets.QLabel("-")
+        self.result_artifacts = QtWidgets.QLabel("-")
+        self.result_manifests = QtWidgets.QLabel("-")
+        self.result_readiness = QtWidgets.QLabel("No manifest loaded.")
+        self.retarget_diagnostics = QtWidgets.QLabel("No retarget plan generated.")
+        for label in (
+            self.result_summary,
+            self.result_output,
+            self.result_artifacts,
+            self.result_manifests,
+            self.result_readiness,
+            self.retarget_diagnostics,
+        ):
+            label.setWordWrap(True)
+        inspector_layout.addRow("Result", self.result_summary)
+        inspector_layout.addRow("Output", self.result_output)
+        inspector_layout.addRow("Artifacts", self.result_artifacts)
+        inspector_layout.addRow("Manifests", self.result_manifests)
+        inspector_layout.addRow("Readiness", self.result_readiness)
+        inspector_layout.addRow("Retarget", self.retarget_diagnostics)
+        bridge_buttons = QtWidgets.QHBoxLayout()
+        self.create_unity_bridge_button = QtWidgets.QPushButton("Unity Bridge")
+        self.create_unreal_bridge_button = QtWidgets.QPushButton("Unreal Bridge")
+        self.create_unity_bridge_button.setEnabled(False)
+        self.create_unreal_bridge_button.setEnabled(False)
+        self.create_unity_bridge_button.clicked.connect(lambda: self.createEngineBridgeRequested.emit("unity"))
+        self.create_unreal_bridge_button.clicked.connect(lambda: self.createEngineBridgeRequested.emit("unreal"))
+        bridge_buttons.addWidget(self.create_unity_bridge_button)
+        bridge_buttons.addWidget(self.create_unreal_bridge_button)
+        inspector_layout.addRow("Export", bridge_buttons)
+        retarget_buttons = QtWidgets.QHBoxLayout()
+        self.plan_unity_retarget_button = QtWidgets.QPushButton("Plan Unity Retarget")
+        self.plan_unreal_retarget_button = QtWidgets.QPushButton("Plan Unreal Retarget")
+        self.plan_unity_retarget_button.setEnabled(False)
+        self.plan_unreal_retarget_button.setEnabled(False)
+        self.plan_unity_retarget_button.clicked.connect(lambda: self.planRetargetGraphRequested.emit("unity"))
+        self.plan_unreal_retarget_button.clicked.connect(lambda: self.planRetargetGraphRequested.emit("unreal"))
+        retarget_buttons.addWidget(self.plan_unity_retarget_button)
+        retarget_buttons.addWidget(self.plan_unreal_retarget_button)
+        inspector_layout.addRow("Retarget", retarget_buttons)
+        root.addWidget(inspector)
+
         root.addWidget(QtWidgets.QLabel("Parameters"))
         root.addWidget(self.parameter_form)
         job_box = QtWidgets.QGroupBox("Evaluation Job")
@@ -129,6 +182,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
 
         self.palette_view.selectionModel().selectionChanged.connect(lambda *_: self._palette_selection_changed())
         self.graph_view.selectionModel().selectionChanged.connect(lambda *_: self._graph_selection_changed())
+        self.history_view.selectionModel().selectionChanged.connect(lambda *_: self._refresh_result_inspector())
 
     @QtCore.Slot()
     def refresh(self) -> None:
@@ -214,6 +268,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
             self.history_model.clear()
         self.graph_model.set_graph(graph)
         self._sync_parameter_form_to_graph()
+        self._refresh_result_inspector()
         if emit:
             self.graphChanged.emit(graph)
 
@@ -221,6 +276,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         graph = EditGraph(graph_id=graph_id or self.graph_model.graph().graph_id, name="Qt Operation Graph")
         self.set_graph(graph, emit=False)
         self.history_model.clear()
+        self._clear_retarget_plan()
+        self._refresh_result_inspector()
 
     def set_evaluation_result(self, result: EvaluationResult, payload: dict[str, object] | None = None) -> None:
         self._last_result = result
@@ -229,10 +286,13 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.history_model.append_result(result, payload=payload)
         self.status.setText(f"Graph {result.status}: {len(result.steps)} steps.")
         self.audit_button.setEnabled(True)
+        if self.history_model.rowCount():
+            self.history_view.selectRow(0)
         failed_row = self.graph_model.first_failed_row()
         if failed_row is not None:
             self.graph_view.selectRow(failed_row)
             self.status.setText(f"Graph failed at row {failed_row + 1}.")
+        self._refresh_result_inspector()
 
     def apply_audit_manifest(self, manifest_payload: dict[str, object], *, message: str = "") -> None:
         if self._last_result is None:
@@ -243,7 +303,10 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._last_payload = payload
         self.graph_model.set_evaluation_result(self._last_result, payload=payload)
         self.history_model.append_result(self._last_result, payload=payload, message=message or "audit refreshed")
+        if self.history_model.rowCount():
+            self.history_view.selectRow(0)
         self.audit_status.setText(message or "Audit refreshed graph result.")
+        self._refresh_result_inspector()
 
     def set_graph_job_submitted(self, job_id: str) -> None:
         self._active_job_id = job_id
@@ -288,12 +351,101 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.cancel_job_button.setEnabled(False)
         self.retry_button.setEnabled(False)
         self.audit_button.setEnabled(False)
+        self._refresh_result_inspector()
 
     def set_history_payloads(self, payloads: tuple[dict[str, object], ...] | list[dict[str, object]]) -> None:
         self.history_model.set_payloads(payloads)
+        self._restore_retarget_plan_from_history()
+        if self.history_model.rowCount():
+            self.history_view.selectRow(0)
+        self._refresh_result_inspector()
 
     def history_payloads(self) -> tuple[dict[str, object], ...]:
         return self.history_model.payloads()
+
+    def set_result_manifest(
+        self,
+        manifest_payload: dict[str, object] | None,
+        *,
+        asset_dir: str | None = None,
+        message: str = "",
+    ) -> None:
+        self._manifest_payload = dict(manifest_payload) if isinstance(manifest_payload, dict) else None
+        self._asset_dir = str(asset_dir or "")
+        if message:
+            self.audit_status.setText(message)
+        self._refresh_result_inspector()
+
+    def set_retarget_plan(
+        self,
+        *,
+        target_engine: str,
+        graph: EditGraph,
+        report_payload: dict[str, object],
+        message: str = "",
+    ) -> None:
+        self._retarget_target = target_engine
+        self._retarget_report_payload = dict(report_payload)
+        self._retarget_after_report_payload = None
+        self.history_model.append_payload(
+            {
+                "graph_id": graph.graph_id,
+                "status": "planned",
+                "output_path": graph.output_path or "",
+                "duration_ms": 0.0,
+                "artifact_count": 0,
+                "audit_badge": str(report_payload.get("status") or ""),
+                "message": message or _retarget_summary(target_engine, graph, report_payload),
+                "details": {
+                    "retarget_target": target_engine,
+                    "retarget_report": dict(report_payload),
+                    "retarget_node_kinds": [node.kind for node in graph.nodes],
+                },
+            }
+        )
+        if self.history_model.rowCount():
+            self.history_view.selectRow(0)
+        self._refresh_result_inspector()
+
+    def set_retarget_comparison(
+        self,
+        *,
+        target_engine: str,
+        graph: EditGraph,
+        report_payload: dict[str, object],
+        message: str = "",
+    ) -> None:
+        planned_report = self._retarget_report_payload or _latest_planned_retarget_report(
+            self.history_model.payloads(),
+            target_engine=target_engine,
+        )
+        self._retarget_target = target_engine
+        self._retarget_report_payload = dict(planned_report or {})
+        self._retarget_after_report_payload = dict(report_payload)
+        comparison = _retarget_comparison(self._retarget_report_payload, self._retarget_after_report_payload)
+        self.history_model.append_payload(
+            {
+                "graph_id": graph.graph_id,
+                "status": "verified",
+                "output_path": graph.output_path or "",
+                "duration_ms": 0.0,
+                "artifact_count": 0,
+                "audit_badge": str(report_payload.get("status") or ""),
+                "message": message or _retarget_comparison_summary(target_engine, graph, comparison),
+                "details": {
+                    "retarget_target": target_engine,
+                    "retarget_report": self._retarget_report_payload,
+                    "retarget_after_report": self._retarget_after_report_payload,
+                    "retarget_resolved": comparison["resolved"],
+                    "retarget_remaining": comparison["remaining"],
+                    "retarget_new": comparison["new"],
+                    "retarget_node_kinds": [node.kind for node in graph.nodes],
+                },
+            }
+        )
+        if self.history_model.rowCount():
+            self.history_view.selectRow(0)
+        self._refresh_result_inspector()
 
     def set_graph_audit_submitted(self, job_id: str) -> None:
         self._active_audit_job_id = job_id
@@ -332,6 +484,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
     @QtCore.Slot()
     def _graph_selection_changed(self) -> None:
         self._sync_parameter_form_to_graph()
+        self._refresh_result_inspector()
 
     def _sync_parameter_form_to_graph(self) -> None:
         row = self._selected_graph_row()
@@ -350,6 +503,12 @@ class OperationGraphPanel(QtWidgets.QWidget):
         if selection is None or not selection.hasSelection():
             return None
         return selection.selectedRows()[0].row()
+
+    def _selected_history_row(self):
+        selection = self.history_view.selectionModel()
+        if selection is not None and selection.hasSelection():
+            return self.history_model.row_at(selection.selectedRows()[0].row())
+        return self.history_model.row_at(0)
 
     def _operation_for_node(self, node) -> OperationRow | None:  # type: ignore[no-untyped-def]
         if node is None:
@@ -370,6 +529,263 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.apply_params_button.setEnabled(enabled)
         self.evaluate_button.setEnabled(enabled)
         self.parameter_form.setEnabled(enabled)
+
+    def _refresh_result_inspector(self) -> None:
+        history = self._selected_history_row()
+        if history is None:
+            self.result_summary.setText("No graph result selected.")
+            self.result_output.setText("-")
+        else:
+            self.result_summary.setText(
+                f"{history.status} | {history.graph_id} | {history.duration_ms:.0f} ms | {history.message}"
+            )
+            self.result_output.setText(history.output_path or "-")
+
+        artifact_paths, manifest_paths = self._selected_node_paths()
+        if artifact_paths:
+            self.result_artifacts.setText("\n".join(artifact_paths))
+        elif history is not None and history.artifact_count:
+            self.result_artifacts.setText(f"{history.artifact_count} artifact(s) recorded.")
+        else:
+            self.result_artifacts.setText("-")
+
+        if manifest_paths:
+            self.result_manifests.setText("\n".join(manifest_paths))
+        elif self._asset_dir:
+            self.result_manifests.setText(f"{self._asset_dir}/asset_manifest.json")
+        else:
+            self.result_manifests.setText("-")
+
+        self.result_readiness.setText(self._readiness_summary())
+        self.retarget_diagnostics.setText(self._retarget_diagnostics_summary())
+        can_bridge = self._manifest_engine_ready()
+        self.create_unity_bridge_button.setEnabled(can_bridge)
+        self.create_unreal_bridge_button.setEnabled(can_bridge)
+        can_plan = self._manifest_payload is not None and bool(self._asset_dir)
+        self.plan_unity_retarget_button.setEnabled(can_plan)
+        self.plan_unreal_retarget_button.setEnabled(can_plan)
+
+    def _selected_node_paths(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        row = self._selected_graph_row()
+        if row is None:
+            return (), ()
+        index = self.graph_model.index(row, 0)
+        artifact_paths = self.graph_model.data(index, self.graph_model.ArtifactRole) or ()
+        manifest_paths = self.graph_model.data(index, self.graph_model.ManifestRole) or ()
+        return tuple(str(item) for item in artifact_paths), tuple(str(item) for item in manifest_paths)
+
+    def _readiness_summary(self) -> str:
+        payload = self._manifest_payload
+        if payload is None:
+            return "No manifest loaded."
+        validation = payload.get("validation") if isinstance(payload.get("validation"), dict) else {}
+        status = str(validation.get("status") or "skipped")
+        errors = int(validation.get("error_count") or 0)
+        warnings = int(validation.get("warning_count") or 0)
+        if status in {"passed", "warnings"} and errors == 0:
+            prefix = "Engine bridge ready"
+            if warnings:
+                prefix += f" with {warnings} warning(s)"
+            else:
+                prefix += ": audit passed"
+        elif status == "failed" or errors:
+            prefix = f"Blocked by audit errors ({errors} error(s), {warnings} warning(s))"
+        else:
+            prefix = "Audit required before engine bridge"
+        targets = _engine_target_text(payload)
+        bridges = _bridge_history_text(payload)
+        details = [prefix]
+        if targets:
+            details.append(f"Targets: {targets}")
+        if bridges:
+            details.append(f"Bridges: {bridges}")
+        return " | ".join(details)
+
+    def _manifest_engine_ready(self) -> bool:
+        payload = self._manifest_payload
+        if payload is None or not self._asset_dir:
+            return False
+        validation = payload.get("validation") if isinstance(payload.get("validation"), dict) else {}
+        status = str(validation.get("status") or "skipped")
+        errors = int(validation.get("error_count") or 0)
+        return status in {"passed", "warnings"} and errors == 0
+
+    def _retarget_diagnostics_summary(self) -> str:
+        if self._retarget_report_payload is None:
+            return "No retarget plan generated."
+        return _retarget_report_text(
+            self._retarget_target,
+            self.graph_model.graph(),
+            self._retarget_report_payload,
+            after_report_payload=self._retarget_after_report_payload,
+        )
+
+    def _restore_retarget_plan_from_history(self) -> None:
+        for row in self.history_model.rows():
+            details = row.details
+            report = details.get("retarget_report")
+            after_report = details.get("retarget_after_report")
+            target = details.get("retarget_target")
+            if isinstance(report, dict) and target:
+                self._retarget_target = str(target)
+                self._retarget_report_payload = dict(report)
+                self._retarget_after_report_payload = (
+                    dict(after_report) if isinstance(after_report, dict) else None
+                )
+                return
+        self._clear_retarget_plan()
+
+    def _clear_retarget_plan(self) -> None:
+        self._retarget_target = ""
+        self._retarget_report_payload = None
+        self._retarget_after_report_payload = None
+
+
+def _engine_target_text(payload: dict[str, object]) -> str:
+    targets = payload.get("engine_targets")
+    if not isinstance(targets, list):
+        return ""
+    names: list[str] = []
+    for target in targets:
+        if isinstance(target, dict) and target.get("engine"):
+            names.append(str(target["engine"]))
+    return ", ".join(dict.fromkeys(names))
+
+
+def _bridge_history_text(payload: dict[str, object]) -> str:
+    custom = payload.get("custom") if isinstance(payload.get("custom"), dict) else {}
+    history = custom.get("engine_export_bridges") if isinstance(custom, dict) else None
+    if not isinstance(history, list):
+        return ""
+    names: list[str] = []
+    for item in history:
+        if isinstance(item, dict) and item.get("target_engine"):
+            names.append(str(item["target_engine"]))
+    return ", ".join(dict.fromkeys(names))
+
+
+def _retarget_summary(target_engine: str, graph: EditGraph, report_payload: dict[str, object]) -> str:
+    issues = _retarget_issues(report_payload)
+    return f"{target_engine.title()} retarget plan: {len(graph.nodes)} nodes from {len(issues)} diagnostics"
+
+
+def _retarget_report_text(
+    target_engine: str,
+    graph: EditGraph,
+    report_payload: dict[str, object],
+    *,
+    after_report_payload: dict[str, object] | None = None,
+) -> str:
+    issues = _retarget_issues(report_payload)
+    if after_report_payload is not None:
+        comparison = _retarget_comparison(report_payload, after_report_payload)
+        return _retarget_comparison_text(target_engine, graph, comparison, after_report_payload)
+    if not issues:
+        return f"{target_engine.title()} retarget plan: no retarget diagnostics; graph has {len(graph.nodes)} nodes."
+    counts = _severity_counts(issues)
+    headline = (
+        f"{target_engine.title()} retarget plan: {len(graph.nodes)} nodes from "
+        f"{len(issues)} diagnostics"
+    )
+    severity = ", ".join(f"{name}={count}" for name, count in counts.items() if count)
+    examples = []
+    for issue in issues[:3]:
+        code = str(issue.get("code") or "diagnostic")
+        suggestion = str(issue.get("suggestion") or issue.get("message") or "")
+        examples.append(f"{code}: {suggestion}")
+    parts = [headline]
+    if severity:
+        parts.append(severity)
+    parts.extend(examples)
+    return "\n".join(parts)
+
+
+def _retarget_comparison_summary(target_engine: str, graph: EditGraph, comparison: dict[str, list[str]]) -> str:
+    return (
+        f"{target_engine.title()} retarget check: {len(comparison['resolved'])}/"
+        f"{len(comparison['planned'])} planned diagnostics resolved after {len(graph.nodes)} nodes"
+    )
+
+
+def _retarget_comparison_text(
+    target_engine: str,
+    graph: EditGraph,
+    comparison: dict[str, list[str]],
+    after_report_payload: dict[str, object],
+) -> str:
+    headline = _retarget_comparison_summary(target_engine, graph, comparison)
+    after_issues = _retarget_issues(after_report_payload)
+    counts = _severity_counts(after_issues)
+    severity = ", ".join(f"{name}={count}" for name, count in counts.items() if count)
+    parts = [
+        headline,
+        (
+            f"remaining={len(comparison['remaining'])}, "
+            f"new={len(comparison['new'])}"
+        ),
+    ]
+    if severity:
+        parts.append(f"after severity: {severity}")
+    if comparison["remaining"]:
+        parts.append("Remaining: " + ", ".join(comparison["remaining"][:3]))
+    if comparison["new"]:
+        parts.append("New: " + ", ".join(comparison["new"][:3]))
+    return "\n".join(parts)
+
+
+def _retarget_comparison(
+    planned_report: dict[str, object],
+    after_report: dict[str, object],
+) -> dict[str, list[str]]:
+    planned = {_issue_key(issue) for issue in _retarget_issues(planned_report)}
+    after = {_issue_key(issue) for issue in _retarget_issues(after_report)}
+    return {
+        "planned": sorted(planned),
+        "resolved": sorted(planned - after),
+        "remaining": sorted(planned & after),
+        "new": sorted(after - planned),
+    }
+
+
+def _retarget_issues(report_payload: dict[str, object]) -> list[dict[str, object]]:
+    issues = report_payload.get("issues")
+    if not isinstance(issues, list):
+        return []
+    return [
+        issue
+        for issue in issues
+        if isinstance(issue, dict) and str(issue.get("rule") or "").startswith("retarget.")
+    ]
+
+
+def _severity_counts(issues: list[dict[str, object]]) -> dict[str, int]:
+    counts = {"error": 0, "warning": 0, "info": 0}
+    for issue in issues:
+        severity = str(issue.get("severity") or "")
+        if severity in counts:
+            counts[severity] += 1
+    return counts
+
+
+def _issue_key(issue: dict[str, object]) -> str:
+    return f"{issue.get('rule') or ''}:{issue.get('code') or ''}"
+
+
+def _latest_planned_retarget_report(
+    payloads: tuple[dict[str, object], ...],
+    *,
+    target_engine: str,
+) -> dict[str, object]:
+    for payload in payloads:
+        details = payload.get("details")
+        if not isinstance(details, dict):
+            continue
+        if str(details.get("retarget_target") or "") != target_engine:
+            continue
+        report = details.get("retarget_report")
+        if isinstance(report, dict):
+            return dict(report)
+    return {}
 
 
 __all__ = ["OperationGraphPanel"]

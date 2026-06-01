@@ -266,3 +266,30 @@ def test_operation_graph_history_model_records_result_payloads(qapp):
     assert model.rowCount() == 1
     assert model.data(model.index(0, 0)) == "graph_1"
     assert model.data(model.index(0, 4)) == "warnings"
+
+
+def test_operation_graph_history_model_appends_planned_payload(qapp):
+    model = OperationGraphHistoryModel()
+
+    row = model.append_payload(
+        {
+            "graph_id": "retarget-unreal",
+            "status": "planned",
+            "output_path": "C:/tmp/retarget.glb",
+            "duration_ms": 0.0,
+            "artifact_count": 0,
+            "audit_badge": "warnings",
+            "message": "planned retarget graph",
+            "details": {
+                "retarget_target": "unreal",
+                "retarget_report": {"status": "warnings", "issues": []},
+            },
+        }
+    )
+
+    assert row.status == "planned"
+    assert row.details["retarget_target"] == "unreal"
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 1)) == "planned"
+    assert model.payloads()[0]["graph_id"] == "retarget-unreal"
+    assert model.payloads()[0]["details"]["retarget_report"]["status"] == "warnings"

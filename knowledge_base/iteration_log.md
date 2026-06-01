@@ -587,3 +587,156 @@ Verification so far:
 
 - Focused Qt persistence tests: 37 passed.
 - Full project verification: 581 passed, 3 skipped.
+
+## 2026-06-01 Graph Result Inspector And Bridge Slice
+
+Started turning graph results into inspectable, engine-ready pipeline resources
+inside the Qt editor.
+
+Book/roadmap principles applied:
+
+- Qt widgets should emit user intent while services/controllers perform
+  pipeline work.
+- Engine handoff must be manifest-driven and deterministic, with Unity/Unreal
+  bridge packages produced by the shared core contract rather than direct
+  editor-side calls.
+- Graph evaluation history should lead to action: inspect artifacts, read audit
+  readiness, and package validated outputs for downstream engine MCPs.
+
+Added:
+
+- Result inspector in the Qt operation-graph panel with selected result output,
+  selected node artifact/manifest paths, manifest validation status, engine
+  targets, and bridge history.
+- Manifest-gated Unity/Unreal bridge buttons that are disabled when audit
+  validation is failed or missing.
+- `CoreBridge.create_engine_export_bridge` wrapper over the core offline export
+  bridge contract.
+- Main-window bridge creation handler that reads the selected asset manifest,
+  blocks failed audit states, writes project bridge packages, refreshes the
+  manifest-backed inspector, and keeps Unity/Unreal editor work downstream.
+- Focused tests for bridge package creation, inspector readiness gates, bridge
+  signals, and main-window manifest-backed bridge creation.
+
+Verification so far:
+
+- Focused graph inspector/bridge tests: 24 passed.
+- Full project verification: 584 passed, 3 skipped.
+
+## 2026-06-01 Graph Result Retarget Planning Slice
+
+Connected Qt graph results to the shared core retarget planner that MCP already
+uses.
+
+Book/roadmap principles applied:
+
+- Engine fix-up should be an authored operation graph, not a hidden export
+  mutation.
+- Qt panels emit intent; `CoreBridge` and `MainWindow` own core calls, scene
+  attachment, graph persistence, and status reporting.
+- Unity/Unreal handoff is more trustworthy when retarget diagnostics become
+  visible graph nodes before bridge package creation.
+
+Added:
+
+- Result-inspector buttons for Unity and Unreal retarget planning.
+- `CoreBridge.plan_engine_retarget_graph` wrapper over
+  `ghostforge_core.retarget.plan_retarget_graph_for_asset`.
+- Main-window retarget handler that creates a stable per-object retarget graph
+  id, assigns output path/base path, saves the graph to the core store, and
+  attaches it to the selected scene object.
+- Focused tests for core planning, panel retarget signals, and main-window
+  scene graph attachment.
+
+Verification so far:
+
+- Focused graph retarget planning tests: 26 passed.
+- Full project verification: 586 passed, 3 skipped.
+
+## 2026-06-01 Graph Retarget Diagnostics Slice
+
+Made retarget planning inspectable instead of leaving the generated graph
+unexplained.
+
+Book/roadmap principles applied:
+
+- Debuggability is a product feature for tools pipelines.
+- Retargeting should remain graph-native and diagnostics-driven, not a hidden
+  export-side mutation.
+- Qt model/view state should expose structured report data that MCP and future
+  inspectors can reason about.
+
+Added:
+
+- Planned graph history rows via `OperationGraphHistoryModel.append_payload`.
+- Retarget diagnostics in the graph result inspector, filtered to `retarget.*`
+  audit issues and showing issue counts, severity counts, codes, and
+  suggestions.
+- Main-window retarget planning now forwards the planner `AuditReport` payload
+  into the graph panel before storing the scene object's graph history.
+- Focused tests for planned history rows, retarget diagnostic filtering, and
+  main-window persisted planned history.
+
+Verification so far:
+
+- Focused graph retarget diagnostics tests: 29 passed.
+- Full project verification: 588 passed, 3 skipped.
+
+## 2026-06-01 Retarget Diagnostics Persistence Slice
+
+Moved retarget planner diagnostics from session-only UI state into persisted
+graph history payloads.
+
+Book/roadmap principles applied:
+
+- Pipeline diagnostics are resource state when they explain why an operation
+  graph exists.
+- Scene documents should restore graph intent, result context, and audit
+  evidence together.
+- Qt model/view history should remain extensible enough for MCP and future
+  inspectors to consume structured details, not just display text.
+
+Added:
+
+- Optional structured `details` on graph history rows.
+- Retarget plan history details containing `retarget_target`,
+  `retarget_report`, and generated node kinds.
+- Inspector restoration of retarget diagnostics from saved history payloads.
+- Save/open coverage proving planned retarget diagnostics survive `.gforge`
+  scene persistence.
+
+Verification so far:
+
+- Focused retarget diagnostics persistence tests: 29 passed.
+- Full project verification: 588 passed, 3 skipped.
+
+## 2026-06-01 Retarget Diagnostic Comparison Slice
+
+Turned retarget planning into a visible edit loop by comparing planner
+diagnostics against the asset state after the generated retarget graph runs.
+
+Book/roadmap principles applied:
+
+- Tool pipelines need post-operation validation, not only preflight warnings.
+- Retargeting remains more trustworthy when the evidence is persisted as
+  resource history instead of UI-only labels.
+- Qt panels should render structured state while `CoreBridge` and core audits
+  own the actual validation work.
+
+Added:
+
+- `CoreBridge.lint_engine_retarget` for Unity/Unreal retarget-only audits.
+- Post-evaluation retarget comparison in the Qt graph inspector, including
+  resolved, remaining, and newly introduced diagnostic keys.
+- Verified graph history rows that persist the planned report, after report,
+  comparison buckets, target engine, and generated retarget node kinds.
+- Main-window completion handling that records the comparison after retarget
+  graph jobs update the selected scene object.
+- Focused tests for bridge linting, graph-panel comparison rendering/restoring,
+  and main-window comparison recording after graph evaluation.
+
+Verification so far:
+
+- Focused retarget comparison tests: 29 passed.
+- Qt suite: 59 passed.
+- Full project verification: 590 passed, 3 skipped.

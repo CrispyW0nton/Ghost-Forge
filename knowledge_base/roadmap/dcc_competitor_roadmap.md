@@ -74,6 +74,11 @@ Recent progress as of 2026-06-01:
 - Qt graph result history now tracks graph status, output path, artifact count, and manifest validation/audit badge from evaluation payloads.
 - Qt graph-linked audit actions now submit durable audit jobs for manifest-backed graph results and refresh badges/history from persisted audit history.
 - `.gforge` scene documents now persist per-object graph result history, so reopened scenes restore evaluation/audit context in the operation-graph panel.
+- Qt graph result inspector now summarizes selected result output, artifacts, manifest readiness, engine targets, bridge history, and can create manifest-recorded Unity/Unreal offline bridge packages.
+- Qt graph result inspector can now request Unity/Unreal retarget plans through the shared core planner and attach the returned retarget graph to the selected object for evaluation.
+- Qt graph result inspector now records planned retarget history rows and surfaces the retarget-specific audit diagnostics that caused the planner to emit graph nodes.
+- `.gforge` scene documents now preserve planned retarget report payloads in graph history so reopened scenes restore the diagnostic explanation.
+- Qt now re-lints retargeted assets after graph evaluation, records verified history rows, and compares planned, resolved, remaining, and newly introduced retarget diagnostics.
 
 ## Competitor Capability Map
 
@@ -286,7 +291,7 @@ Acceptance gate:
 
 Deepen graph result inspection and engine-readiness handling:
 
-- Add a graph-result inspector that opens output meshes, asset directories, manifests, audit history, and side-effect artifacts from selected history/node rows.
-- Add engine-readiness actions from graph results: audit gate status, retarget/package shortcuts, and Unity/Unreal bridge creation when manifests pass.
+- Add file/action affordances for graph result outputs: open/reveal output meshes, asset directories, manifests, audit history, and side-effect artifacts from selected history/node rows.
+- Promote retarget comparison into a richer diff view with direct focus on remaining/new diagnostic families.
 - Expand descriptor-generated parameter editors with path pickers, presets, drag reorder, and per-node enable/disable controls.
 - Keep graph ids and graph-history payloads stable across Qt save/open and MCP inspection.

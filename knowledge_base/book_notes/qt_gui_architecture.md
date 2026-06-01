@@ -107,6 +107,37 @@ per-object graph history payloads in `.gforge` files and reloads them into the
 operation-graph panel when the object is selected. This keeps audit/readiness
 context attached to the authored asset across sessions.
 
+Graph-result inspection should stay attached to the same panel/model contract.
+The Qt shell now reads the selected scene object's manifest into the graph
+panel, summarizes the active result, node artifacts, manifest path, audit
+status, engine targets, and bridge history, and exposes Unity/Unreal bridge
+buttons only when manifest validation is not blocking. The buttons emit intent;
+`MainWindow` and `CoreBridge` perform the manifest-gated package creation.
+
+Retarget planning follows the same signal/service rule. The graph panel exposes
+Unity/Unreal retarget plan requests from the result inspector, but it does not
+inspect audit diagnostics itself. `CoreBridge` calls the shared
+`ghostforge_core.retarget` planner, `MainWindow` attaches the returned
+`EditGraph` to the selected scene object, and normal graph evaluation handles
+the actual mesh rewrite.
+
+Retarget diagnostics should be shown in the same inspector instead of hidden in
+logs. The planner returns an `AuditReport`, so Qt stores a planned history row
+and renders the retarget-specific issue codes, severities, and suggestions next
+to the graph that was generated from them.
+
+That diagnostic payload must survive save/open too. Planned retarget history
+rows now carry structured `details` with the target engine and planner report,
+so `.gforge` scene reload can restore the graph and the explanatory diagnostic
+summary together.
+
+Retarget verification should be model data rather than a transient toast. After
+a retarget graph finishes, the Qt shell now asks `CoreBridge` to re-run the
+target-engine retarget audit, stores a verified history row, and renders which
+planned diagnostics were resolved, which remain, and which new issues appeared.
+That keeps the graph inspector useful as an edit loop, not just a pre-export
+warning list.
+
 ## First Tests To Add
 
 - Main-window construction without GPU/model dependencies.
@@ -123,3 +154,8 @@ context attached to the authored asset across sessions.
 - Operation graph result history and audit badges render from manifest/evaluation payloads rather than local-only UI text.
 - Operation graph audit actions run through durable core audit jobs and refresh from the persisted manifest.
 - Scene save/open restores operation graph result history and audit badges.
+- Operation graph result inspector shows manifest readiness and routes Unity/Unreal bridge creation through core services.
+- Operation graph result inspector routes Unity/Unreal retarget planning through the shared core planner and restores the generated graph in the editor.
+- Operation graph result inspector records planned retarget history rows and displays retarget audit diagnostics.
+- Scene save/open restores planned retarget diagnostic payloads into the graph result inspector.
+- Completed retarget graph evaluations compare planned and post-evaluation diagnostics and persist the verified result row.

@@ -137,6 +137,95 @@ def test_main_window_runs_graph_result_audit_and_refreshes_history(qapp, tmp_pat
         window.close()
 
 
+def test_main_window_creates_engine_bridge_from_selected_manifest(qapp, tmp_path):
+    source = tmp_path / "cube.glb"
+    trimesh.creation.box(extents=(1, 1, 1)).export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source)
+        record = window.scene_model.records()[0]
+
+        package_path = window._create_graph_result_engine_bridge("unity")
+
+        assert package_path is not None
+        assert package_path.exists()
+        assert package_path.name == "ghostforge_bridge_unity.json"
+        refreshed = read_manifest(record.asset_dir)
+        assert refreshed.custom["engine_export_bridges"][-1]["target_engine"] == "unity"
+        assert "Bridges: unity" in window.operation_graph_panel.result_readiness.text()
+        assert window.operation_graph_panel.create_unity_bridge_button.isEnabled()
+    finally:
+        window.close()
+
+
+def test_main_window_plans_retarget_graph_from_selected_manifest(qapp, tmp_path):
+    source = tmp_path / "cube.glb"
+    trimesh.creation.box(extents=(1, 2, 3)).export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    scene_path = tmp_path / "data" / "project" / "scenes" / "retarget_scene.gforge"
+    try:
+        window.import_mesh(source)
+        record = window.scene_model.records()[0]
+
+        graph = window._plan_graph_result_retarget("unreal")
+
+        assert graph is not None
+        assert graph.graph_id == f"{record.object_id}_retarget_unreal"
+        assert graph.base_asset_path == str(source)
+        assert graph.output_path.endswith("retarget_result.glb")
+        assert graph.nodes
+        assert window.scene_model.records()[0].operation_graph == graph
+        assert window.scene_model.records()[0].operation_graph_history[0]["status"] == "planned"
+        assert (
+            window.scene_model.records()[0].operation_graph_history[0]["details"]["retarget_target"]
+            == "unreal"
+        )
+        assert window.operation_graph_panel.graph().graph_id == graph.graph_id
+        assert window.operation_graph_panel.graph_model.rowCount() == len(graph.nodes)
+        assert "Unreal retarget plan" in window.operation_graph_panel.retarget_diagnostics.text()
+        assert bridge.context.graphs.load(graph.graph_id).nodes == graph.nodes
+
+        window.save_scene(scene_path)
+        window.new_scene()
+        window.open_scene(scene_path)
+
+        restored = window.scene_model.records()[0]
+        assert restored.operation_graph is not None
+        assert restored.operation_graph.graph_id == graph.graph_id
+        assert restored.operation_graph_history[0]["details"]["retarget_target"] == "unreal"
+        assert "Unreal retarget plan" in window.operation_graph_panel.retarget_diagnostics.text()
+        assert "axis_mismatch_assumed" in window.operation_graph_panel.retarget_diagnostics.text()
+    finally:
+        window.close()
+
+
+def test_main_window_records_retarget_comparison_after_graph_evaluation(qapp, tmp_path):
+    source = tmp_path / "cube.glb"
+    trimesh.creation.box(extents=(1, 2, 3)).export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=True))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source)
+
+        graph = window._plan_graph_result_retarget("unreal")
+        assert graph is not None
+        assert graph.nodes
+
+        window._evaluate_operation_graph()
+        assert window._graph_job_contexts
+        _wait_for_graph_jobs(window)
+
+        history = window.scene_model.records()[0].operation_graph_history
+        assert history[0]["status"] == "verified"
+        assert history[0]["details"]["retarget_target"] == "unreal"
+        assert "retarget_after_report" in history[0]["details"]
+        assert "planned diagnostics resolved" in window.operation_graph_panel.retarget_diagnostics.text()
+    finally:
+        window.close()
+
+
 def test_main_window_routes_graph_job_cancel(qapp, tmp_path, monkeypatch):
     bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
     window = MainWindow(bridge=bridge)

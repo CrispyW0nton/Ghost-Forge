@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 import uuid
-from dataclasses import asdict, dataclass
+import json
+from dataclasses import asdict, dataclass, field
 
 from PySide6 import QtCore, QtGui
 
@@ -281,6 +281,7 @@ class GraphEvaluationHistoryRow:
     artifact_count: int
     audit_badge: str
     message: str
+    details: dict[str, object] = field(default_factory=dict)
 
 
 class OperationGraphHistoryModel(QtCore.QAbstractTableModel):
@@ -353,6 +354,22 @@ class OperationGraphHistoryModel(QtCore.QAbstractTableModel):
             self.endRemoveRows()
         return row
 
+    def append_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        limit: int = 25,
+    ) -> GraphEvaluationHistoryRow:
+        row = _history_row_from_payload(payload)
+        self.beginInsertRows(QtCore.QModelIndex(), 0, 0)
+        self._rows.insert(0, row)
+        self.endInsertRows()
+        if len(self._rows) > limit:
+            self.beginRemoveRows(QtCore.QModelIndex(), limit, len(self._rows) - 1)
+            del self._rows[limit:]
+            self.endRemoveRows()
+        return row
+
     def set_rows(self, rows: list[GraphEvaluationHistoryRow]) -> None:
         self.beginResetModel()
         self._rows = list(rows)
@@ -370,7 +387,13 @@ class OperationGraphHistoryModel(QtCore.QAbstractTableModel):
         return list(self._rows)
 
     def payloads(self) -> tuple[dict[str, object], ...]:
-        return tuple(asdict(row) for row in self._rows)
+        payloads: list[dict[str, object]] = []
+        for row in self._rows:
+            payload = asdict(row)
+            if not payload["details"]:
+                del payload["details"]
+            payloads.append(payload)
+        return tuple(payloads)
 
     def row_at(self, row: int) -> GraphEvaluationHistoryRow | None:
         if row < 0 or row >= len(self._rows):
@@ -399,7 +422,7 @@ def _params_text(params: dict[str, object]) -> str:
 def _status_color(status: str) -> QtGui.QColor:
     if status in {"available", "runnable", "succeeded", "passed"}:
         return QtGui.QColor("#1F8F3A")
-    if status in {"stub", "pending", "skipped", "warnings"}:
+    if status in {"stub", "pending", "planned", "skipped", "warnings"}:
         return QtGui.QColor("#B9822B")
     return QtGui.QColor("#B34848")
 
@@ -476,6 +499,7 @@ def _result_message(result: EvaluationResult) -> str:
 
 
 def _history_row_from_payload(payload: dict[str, object]) -> GraphEvaluationHistoryRow:
+    details = payload.get("details")
     return GraphEvaluationHistoryRow(
         graph_id=str(payload.get("graph_id") or ""),
         status=str(payload.get("status") or "skipped"),
@@ -484,6 +508,7 @@ def _history_row_from_payload(payload: dict[str, object]) -> GraphEvaluationHist
         artifact_count=int(payload.get("artifact_count") or 0),
         audit_badge=str(payload.get("audit_badge") or ""),
         message=str(payload.get("message") or ""),
+        details=dict(details) if isinstance(details, dict) else {},
     )
 
 

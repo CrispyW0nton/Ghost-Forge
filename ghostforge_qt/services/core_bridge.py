@@ -5,8 +5,16 @@ from pathlib import Path
 from typing import Any
 
 from ghostforge_core import AuditAssetRequest, CoreConfig, CoreContext, EvaluateGraphRequest, bootstrap
+from ghostforge_core.audit.runner import audit_asset
 from ghostforge_core.authoring import EditGraph, EvaluationResult, SOURCE_OPERATION_KINDS, evaluate_graph
+from ghostforge_core.export_bridge import create_export_bridge_package
 from ghostforge_core.operations import mesh_info as mesh_info_op
+from ghostforge_core.retarget import (
+    plan_retarget_graph_for_asset,
+    retarget_rules_for_preset,
+    unity_retarget_preset,
+    unreal_retarget_preset,
+)
 from ghostforge_core.types import JobHandle, MeshInfo
 
 
@@ -241,3 +249,58 @@ class CoreBridge:
             persist=persist,
         )
         return self.context.runner.submit("audit_asset", spec)
+
+    def create_engine_export_bridge(
+        self,
+        asset_dir: Path,
+        *,
+        target_engine: str,
+        target_path: str | None = None,
+        bridge_dir: Path | None = None,
+    ) -> tuple[Any, Path]:
+        return create_export_bridge_package(
+            asset_dir,
+            target_engine=target_engine,
+            target_path=target_path,
+            bridge_dir=bridge_dir,
+        )
+
+    def plan_engine_retarget_graph(
+        self,
+        asset_dir: Path,
+        *,
+        target_engine: str,
+        base_name: str | None = None,
+        graph_id: str | None = None,
+        output_path: Path | None = None,
+    ) -> tuple[EditGraph, Any]:
+        graph, report = plan_retarget_graph_for_asset(
+            asset_dir,
+            target_engine=target_engine,
+            base_name=base_name,
+            graph_id=graph_id,
+            output_path=None if output_path is None else str(output_path),
+        )
+        self.context.graphs.save(graph)
+        return graph, report
+
+    def lint_engine_retarget(
+        self,
+        asset_dir: Path,
+        *,
+        target_engine: str,
+        run_gltf_validator: bool = False,
+    ) -> Any:
+        if target_engine == "unity":
+            preset = unity_retarget_preset()
+        elif target_engine == "unreal":
+            preset = unreal_retarget_preset()
+        else:
+            raise ValueError("target_engine must be 'unity' or 'unreal'")
+        return audit_asset(
+            asset_dir,
+            preset=preset,
+            rules=retarget_rules_for_preset(target_engine),
+            run_gltf_validator=run_gltf_validator,
+            persist=False,
+        )

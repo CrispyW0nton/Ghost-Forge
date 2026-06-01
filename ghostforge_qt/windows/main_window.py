@@ -191,6 +191,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.operation_graph_panel.graphChanged.connect(self._operation_graph_changed)
         self.operation_graph_panel.cancelGraphJobRequested.connect(self._cancel_graph_job)
         self.operation_graph_panel.auditGraphResultRequested.connect(self._audit_operation_graph_result)
+        self.operation_graph_panel.createEngineBridgeRequested.connect(self._create_graph_result_engine_bridge)
+        self.operation_graph_panel.planRetargetGraphRequested.connect(self._plan_graph_result_retarget)
         self.job_controller.jobsChanged.connect(self._graph_jobs_changed)
         self.content_panel.fileActivated.connect(lambda path: self.import_mesh(Path(path)))
         self.theme_manager.themeChanged.connect(self.viewport.apply_theme)
@@ -208,6 +210,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.operation_graph_panel.set_active_object(None)
         self.operation_graph_panel.reset_graph()
         self.operation_graph_panel.clear_graph_job_state()
+        self.operation_graph_panel.set_result_manifest(None)
         self._refresh_mesh_status()
         self._update_window_title()
         self.statusBar().showMessage("New scene")
@@ -252,6 +255,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mesh_selection.active_object_id = record.object_id
         self.mesh_selection.selected_object_ids = {record.object_id}
         self._select_scene_object(record.object_id)
+        self._sync_graph_result_manifest(record)
         self._refresh_topology(record.path)
         self._refresh_mesh_status()
         self.statusBar().showMessage(f"Imported {record.name}")
@@ -468,6 +472,11 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{result_payload.get('warning_count', manifest.validation.warning_count)} warnings"
         )
         self.operation_graph_panel.apply_audit_manifest(manifest.model_dump(mode="json"), message=message)
+        self.operation_graph_panel.set_result_manifest(
+            manifest.model_dump(mode="json"),
+            asset_dir=str(asset_dir),
+            message=message,
+        )
         self._store_selected_graph_history()
         self.statusBar().showMessage(f"Graph result {message}.")
         return message
@@ -477,6 +486,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if result is not None:
             self.operation_graph_panel.set_evaluation_result(result, payload=result_payload)
         graph_history = self.operation_graph_panel.history_payloads()
+        retarget_target = self._retarget_target_from_history(graph_history)
         output_raw = result_payload.get("output_path")
         output_path = Path(str(output_raw or context["output_path"]))
         if not output_path.exists():
@@ -516,6 +526,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mesh_selection.active_object_id = updated.object_id
             self.mesh_selection.selected_object_ids = {updated.object_id}
             self._select_scene_object(updated.object_id)
+            self._sync_graph_result_manifest(updated)
             self._refresh_topology(output_path)
             self._refresh_mesh_status()
             self.statusBar().showMessage(f"Graph generated {output_path.name}.")
@@ -557,6 +568,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     after_watertight=updated.watertight,
                 )
             )
+            self._sync_graph_result_manifest(updated)
+            self._record_retarget_comparison(updated, graph, retarget_target)
         self.viewport.set_scene_records(self.scene_model.records())
         self._refresh_topology(output_path)
         self.mesh_selection.clear_subobjects()
@@ -599,6 +612,133 @@ class MainWindow(QtWidgets.QMainWindow):
             self.bridge.save_authoring_graph(graph)
         except Exception as exc:
             self.statusBar().showMessage(f"Graph save skipped: {exc}")
+
+    @QtCore.Slot(str)
+    def _create_graph_result_engine_bridge(self, target_engine: str) -> Path | None:
+        selected = self._selected_record()
+        if selected is None or selected.asset_dir is None:
+            self.statusBar().showMessage("Select a manifest-backed graph result before creating an engine bridge.")
+            return None
+        try:
+            manifest = read_manifest(selected.asset_dir)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Engine bridge blocked: manifest could not be read: {exc}")
+            return None
+        if manifest.validation.status not in {"passed", "warnings"} or manifest.validation.error_count:
+            self.operation_graph_panel.set_result_manifest(
+                manifest.model_dump(mode="json"),
+                asset_dir=str(selected.asset_dir),
+                message="Engine bridge blocked until audit errors are cleared.",
+            )
+            self.statusBar().showMessage("Engine bridge blocked until audit errors are cleared.")
+            return None
+        try:
+            _package, package_path = self.bridge.create_engine_export_bridge(
+                selected.asset_dir,
+                target_engine=target_engine,
+                bridge_dir=self.project_service.root / "bridges" / selected.object_id,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Engine Bridge", str(exc))
+            return None
+        refreshed = read_manifest(selected.asset_dir)
+        self.operation_graph_panel.set_result_manifest(
+            refreshed.model_dump(mode="json"),
+            asset_dir=str(selected.asset_dir),
+            message=f"{target_engine.title()} bridge package created: {package_path.name}",
+        )
+        self.statusBar().showMessage(f"{target_engine.title()} bridge package created: {package_path}")
+        return package_path
+
+    @QtCore.Slot(str)
+    def _plan_graph_result_retarget(self, target_engine: str) -> EditGraph | None:
+        selected = self._selected_record()
+        if selected is None or selected.asset_dir is None:
+            self.statusBar().showMessage("Select a manifest-backed graph result before planning retargeting.")
+            return None
+        graph_id = f"{selected.object_id}_retarget_{target_engine}"
+        output_path = (
+            self.project_service.root
+            / "outputs"
+            / "graphs"
+            / graph_id
+            / "retarget_result.glb"
+        )
+        try:
+            graph, report = self.bridge.plan_engine_retarget_graph(
+                selected.asset_dir,
+                target_engine=target_engine,
+                base_name=selected.name,
+                graph_id=graph_id,
+                output_path=output_path,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Retarget Graph", str(exc))
+            return None
+        graph = graph.model_copy(
+            update={
+                "asset_id": selected.object_id,
+                "name": f"{selected.name} {target_engine.title()} Retarget",
+                "base_asset_path": graph.base_asset_path or str(selected.path),
+                "output_path": str(output_path),
+            }
+        )
+        self.operation_graph_panel.set_graph(graph, emit=False)
+        report_payload = report.model_dump(mode="json") if hasattr(report, "model_dump") else {}
+        message = (
+            f"Planned {target_engine.title()} retarget graph: "
+            f"{len(graph.nodes)} nodes from {len(getattr(report, 'issues', ()))} diagnostics."
+        )
+        self.operation_graph_panel.set_retarget_plan(
+            target_engine=target_engine,
+            graph=graph,
+            report_payload=report_payload,
+            message=message,
+        )
+        self.scene_model.update_record(
+            selected.object_id,
+            operation_graph=graph,
+            operation_graph_history=self.operation_graph_panel.history_payloads(),
+        )
+        self.bridge.save_authoring_graph(graph)
+        self._sync_graph_result_manifest(selected)
+        self.statusBar().showMessage(message)
+        self.operation_graph_panel.status.setText(message)
+        return graph
+
+    def _record_retarget_comparison(
+        self,
+        record: SceneObjectRecord,
+        graph: EditGraph | object,
+        target_engine: str,
+    ) -> None:
+        if not target_engine or record.asset_dir is None or not isinstance(graph, EditGraph):
+            return
+        try:
+            report = self.bridge.lint_engine_retarget(record.asset_dir, target_engine=target_engine)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Retarget comparison skipped: {exc}")
+            return
+        report_payload = report.model_dump(mode="json") if hasattr(report, "model_dump") else {}
+        self.operation_graph_panel.set_retarget_comparison(
+            target_engine=target_engine,
+            graph=graph,
+            report_payload=report_payload,
+        )
+        self.scene_model.update_record(
+            record.object_id,
+            operation_graph_history=self.operation_graph_panel.history_payloads(),
+        )
+
+    def _retarget_target_from_history(self, history: tuple[dict[str, object], ...]) -> str:
+        for payload in history:
+            details = payload.get("details")
+            if not isinstance(details, dict):
+                continue
+            target = details.get("retarget_target")
+            if target:
+                return str(target)
+        return ""
 
     def _store_selected_graph_history(self) -> None:
         selected = self._selected_record()
@@ -756,10 +896,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.operation_graph_panel.set_active_object(selected)
             self.operation_graph_panel.set_graph(self._graph_for_record(selected), emit=False)
             self.operation_graph_panel.set_history_payloads(selected.operation_graph_history)
+            self._sync_graph_result_manifest(selected)
             self._refresh_topology(selected.path)
         else:
             self.operation_graph_panel.set_active_object(None)
             self.operation_graph_panel.reset_graph()
+            self.operation_graph_panel.set_result_manifest(None)
         self._refresh_mesh_status()
 
     def _graph_for_record(self, record: SceneObjectRecord) -> EditGraph:
@@ -770,6 +912,24 @@ class MainWindow(QtWidgets.QMainWindow):
             asset_id=record.object_id,
             name=f"{record.name} Graph",
             base_asset_path=str(record.path),
+        )
+
+    def _sync_graph_result_manifest(self, record: SceneObjectRecord | None) -> None:
+        if record is None or record.asset_dir is None:
+            self.operation_graph_panel.set_result_manifest(None)
+            return
+        try:
+            manifest = read_manifest(record.asset_dir)
+        except Exception as exc:
+            self.operation_graph_panel.set_result_manifest(
+                None,
+                asset_dir=str(record.asset_dir),
+                message=f"Manifest unavailable: {exc}",
+            )
+            return
+        self.operation_graph_panel.set_result_manifest(
+            manifest.model_dump(mode="json"),
+            asset_dir=str(record.asset_dir),
         )
 
     def _refresh_topology(self, path: Path) -> None:

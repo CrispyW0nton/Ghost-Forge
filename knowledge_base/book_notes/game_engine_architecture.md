@@ -85,6 +85,35 @@ as UI-only memory. Future MCP resources and engine handoff packages should be
 able to inspect the same history when deciding whether a generated asset is
 ready to ship.
 
+The Qt graph surface now creates offline engine bridge packages through the
+same core export-bridge contract used by MCP. The UI reads manifest validation
+state, engine targets, and existing bridge history before enabling Unity/Unreal
+bridge actions, so engine handoff remains a pipeline event attached to the
+asset manifest instead of a direct editor call.
+
+Qt retarget planning now also goes through the same core planner exposed by MCP.
+The editor asks the core to audit the selected manifest for Unity/Unreal
+conventions, receives a retarget `EditGraph`, and attaches it to the scene
+object for normal graph evaluation. This preserves engine handoff as an
+inspectable sequence of operations instead of a hidden one-shot export fix-up.
+
+Retarget diagnostics now remain visible at the graph boundary. The Qt panel
+records the planned retarget graph in result history and shows the filtered
+`retarget.*` audit issues that caused the planner to emit each fix-up family,
+so a user or MCP peer can reason about axis, units, pivot, naming, collision,
+and texture readiness before bridge packaging.
+
+Retarget diagnostic reports are now persisted inside graph history details.
+This keeps the planner's audit evidence attached to the scene document, which
+is closer to the manifest-driven pipeline goal than storing only a human-readable
+status string.
+
+Retarget verification is now a second pipeline event. Once a planned retarget
+graph evaluates, Qt re-runs the target-engine retarget audit through the core,
+records the post-evaluation report, and compares planned issue keys against the
+new report. Resolved, remaining, and newly introduced diagnostics become
+history data that future MCP resources and bridge gates can inspect.
+
 ### Asset Contract
 
 Every generated or imported asset should move toward:
@@ -132,6 +161,11 @@ Do not present TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, or SyncMVD as 
 - Graph result history rows with artifact counts and manifest validation/audit badges.
 - Graph-linked audit jobs that persist audit history and refresh the graph panel from the manifest.
 - Scene documents that restore graph result/audit history alongside graph resources.
+- Qt graph result bridge actions that write manifest-recorded Unity/Unreal bridge packages.
+- Qt graph result retarget actions that attach core-planned Unity/Unreal retarget graphs before bridge packaging.
+- Qt graph result retarget diagnostics that keep planner audit issues visible beside the generated graph.
+- Persisted planned-retarget report payloads that restore across `.gforge` save/open.
+- Post-evaluation retarget audit comparisons that persist resolved, remaining, and new diagnostic keys.
 - Audit gates block engine handoff unless forced.
 - Worker probe state is rendered accurately in the Qt model.
 - A failed model worker leaves a durable failed job with logs and no partial success badge.
