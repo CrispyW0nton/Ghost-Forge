@@ -1,13 +1,27 @@
 from __future__ import annotations
 
+import time
+
 from PySide6 import QtCore
 
 from ghostforge_core import CoreConfig
 from ghostforge_core.manifest import read_manifest
+from ghostforge_core.workers.stub import StubTextTo3DWorker
 from ghostforge_qt.models.scene_model import TransformState
 from ghostforge_qt.services.core_bridge import CoreBridge
 from ghostforge_qt.windows.main_window import MainWindow
 import trimesh
+
+
+def _wait_for_graph_jobs(window: MainWindow, timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and window._graph_job_contexts:
+        window.job_controller.refresh()
+        QtCore.QCoreApplication.processEvents()
+        if not window._graph_job_contexts:
+            return
+        time.sleep(0.05)
+    assert not window._graph_job_contexts
 
 
 def test_main_window_registers_editor_actions(qapp, tmp_path):
@@ -25,7 +39,67 @@ def test_main_window_registers_editor_actions(qapp, tmp_path):
         assert window.worker_panel.model.rowCount() >= 1
         assert window.content_panel.project.root == (tmp_path / "project").resolve()
         assert window.modeling_panel is not None
+        assert window.operation_graph_panel.palette_model.rowCount() >= 1
         assert window.theme_panel is not None
+    finally:
+        window.close()
+
+
+def test_main_window_evaluates_selected_mesh_operation_graph(qapp, tmp_path):
+    source = tmp_path / "offset.glb"
+    mesh = trimesh.creation.box(extents=(1, 1, 1))
+    mesh.apply_translation((5.0, 0.0, 0.0))
+    mesh.export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=True))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source)
+        before = window.scene_model.records()[0]
+        operation = next(row for row in bridge.list_operations() if row.kind == "recenter")
+        window.operation_graph_panel.graph_model.append_operation(operation, {"pivot": "centroid"})
+
+        window._evaluate_operation_graph()
+        assert window._graph_job_contexts
+        _wait_for_graph_jobs(window)
+
+        after = window.scene_model.records()[0]
+        assert after.path != before.path
+        assert after.path.exists()
+        assert "evaluate_authoring_graph" in after.operations
+        assert window.operation_graph_panel.graph_model.data(
+            window.operation_graph_panel.graph_model.index(0, 3)
+        ) == "succeeded"
+        manifest = read_manifest(after.asset_dir)
+        steps = [step for step in manifest.provenance if step.kind == "evaluate_authoring_graph"]
+        assert steps[-1].parameters["graph_id"] == window.operation_graph_panel.graph().graph_id
+    finally:
+        window.close()
+
+
+def test_main_window_source_graph_creates_scene_object(qapp, tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=True))
+    bridge.context.workers.register(StubTextTo3DWorker())
+    window = MainWindow(bridge=bridge)
+    try:
+        operation = next(row for row in bridge.list_operations() if row.kind == "generate_text_to_3d")
+        window.operation_graph_panel.graph_model.append_operation(
+            operation,
+            {"prompt": "small test obelisk", "worker": "stub_text_to_3d"},
+        )
+
+        window._evaluate_operation_graph()
+        assert window._graph_job_contexts
+        _wait_for_graph_jobs(window)
+
+        records = window.scene_model.records()
+        assert len(records) == 1
+        record = records[0]
+        assert record.path.exists()
+        assert record.asset_dir is not None
+        manifest = read_manifest(record.asset_dir)
+        graph_steps = [step for step in manifest.provenance if step.kind == "evaluate_authoring_graph"]
+        assert graph_steps[-1].parameters["source_mode"] == "operation"
+        assert graph_steps[-1].parameters["side_effects"][0]["operation"] == "generate_text_to_3d"
     finally:
         window.close()
 
@@ -85,6 +159,38 @@ def test_main_window_saves_and_reopens_scene_with_manifest(qapp, tmp_path):
         assert restored.transform.translate == (4.0, 5.0, 6.0)
         assert restored.transform.rotate_euler_deg == (0.0, 45.0, 0.0)
         assert restored.manifest_path == imported.manifest_path
+    finally:
+        window.close()
+
+
+def test_main_window_saves_and_reopens_scene_operation_graph(qapp, tmp_path):
+    source = tmp_path / "cube.glb"
+    trimesh.creation.box(extents=(1, 1, 1)).export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    scene_path = tmp_path / "data" / "project" / "scenes" / "graph_scene.gforge"
+    try:
+        window.import_mesh(source)
+        record = window.scene_model.records()[0]
+        operation = next(row for row in bridge.list_operations() if row.kind == "recenter")
+        window.operation_graph_panel.graph_model.append_operation(operation, {"pivot": "centroid"})
+        window._operation_graph_changed(window.operation_graph_panel.graph())
+
+        stored = window.scene_model.records()[0]
+        assert stored.operation_graph is not None
+        assert bridge.context.graphs.load(stored.operation_graph.graph_id).nodes[0].kind == "recenter"
+        window.save_scene(scene_path)
+
+        window.new_scene()
+        assert window.scene_model.rowCount() == 0
+
+        window.open_scene(scene_path)
+        restored = window.scene_model.records()[0]
+        assert restored.object_id == record.object_id
+        assert restored.operation_graph is not None
+        assert restored.operation_graph.nodes[0].kind == "recenter"
+        assert window.operation_graph_panel.graph().graph_id == restored.operation_graph.graph_id
+        assert window.operation_graph_panel.graph_model.rowCount() == 1
     finally:
         window.close()
 

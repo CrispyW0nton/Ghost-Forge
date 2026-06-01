@@ -45,6 +45,7 @@ from ghostforge_core.manifest import (
     read_manifest,
 )
 from ghostforge_core.operations import mesh_info as mesh_info_op
+from ghostforge_core.operations.authoring import EvaluateGraphRequest
 from ghostforge_core.slice import (
     AssetKind,
     AssetSpec,
@@ -78,6 +79,12 @@ from .server import get_context
 
 
 _TERMINAL_STATUSES = {JobStatus.succeeded, JobStatus.failed, JobStatus.cancelled}
+_WORKER_OPERATION_CAPABILITIES = {
+    "generate_text_to_3d": Capability.text_to_3d.value,
+    "generate_image_to_3d": Capability.image_to_3d.value,
+    "worker_refine_mesh": Capability.refine_mesh.value,
+    "worker_texture_mesh": Capability.texture_mesh.value,
+}
 
 
 def _handle_to_dict(handle: JobHandle) -> dict[str, Any]:
@@ -90,6 +97,94 @@ def _resolve_output_dir(output_dir: str | None) -> Path:
         path.mkdir(parents=True, exist_ok=True)
         return path
     return get_context().storage.new_asset_dir()
+
+
+def _operation_descriptors_payload() -> list[dict[str, Any]]:
+    from ghostforge_core.authoring import SOURCE_OPERATION_KINDS
+
+    ctx = get_context()
+    payload: list[dict[str, Any]] = []
+    for descriptor in ctx.operations.descriptors():
+        capability = _WORKER_OPERATION_CAPABILITIES.get(descriptor.kind)
+        operation_type = "source" if descriptor.kind in SOURCE_OPERATION_KINDS else "operation"
+        if capability is not None and operation_type != "source":
+            operation_type = "worker"
+        workers = _operation_worker_status(capability)
+        item = descriptor.model_dump(mode="json")
+        item.update(
+            {
+                "operation_type": operation_type,
+                "capability": capability,
+                "capability_status": _capability_status(workers, capability=capability),
+                "workers": workers,
+            }
+        )
+        payload.append(item)
+    return payload
+
+
+def _operation_worker_status(capability: str | None) -> list[dict[str, Any]]:
+    if capability is None:
+        return []
+    ctx = get_context()
+    cap = Capability(capability)
+    rows: list[dict[str, Any]] = []
+    for worker in ctx.workers.for_capability(cap):
+        try:
+            probe = worker.probe()
+            runnable = probe.runnable
+            reason = probe.reason
+            device = probe.device
+        except Exception as exc:  # pragma: no cover - defensive MCP boundary
+            runnable = False
+            reason = str(exc)
+            device = None
+        rows.append(
+            {
+                "name": worker.name,
+                "priority": worker.priority,
+                "is_stub": getattr(worker, "is_stub", False),
+                "license": getattr(worker, "license", None),
+                "runnable": runnable,
+                "reason": reason,
+                "device": device,
+            }
+        )
+    rows.sort(key=lambda row: (not row["runnable"], -int(row["priority"]), row["name"]))
+    return rows
+
+
+def _capability_status(workers: list[dict[str, Any]], *, capability: str | None) -> str:
+    if capability is None:
+        return "available"
+    if any(row["runnable"] and not row["is_stub"] for row in workers):
+        return "runnable"
+    if any(row["runnable"] and row["is_stub"] for row in workers):
+        return "stub"
+    if workers:
+        return "missing"
+    return "unavailable"
+
+
+def _graph_with_evaluation_payload(graph_id: str) -> dict[str, Any]:
+    ctx = get_context()
+    graph = ctx.graphs.load(graph_id)
+    evaluation = ctx.graphs.load_evaluation(graph_id)
+    out: dict[str, Any] = {"graph": graph.model_dump(mode="json")}
+    if evaluation is not None:
+        out["evaluation"] = evaluation.model_dump(mode="json")
+    return out
+
+
+def _graph_with_overrides(graph, *, input_path: str | None, output_path: str | None):  # type: ignore[no-untyped-def]
+    updates: dict[str, Any] = {}
+    if input_path is not None:
+        updates["base_asset_path"] = input_path
+    if output_path is not None:
+        updates["output_path"] = output_path
+    if not updates:
+        return graph
+    return graph.model_copy(update=updates)
 
 
 def register_tools(server: FastMCP) -> None:
@@ -1566,13 +1661,26 @@ def register_tools(server: FastMCP) -> None:
     @server.tool(
         description=(
             "List every authoring operation the core can apply to a mesh "
-            "(transform, decimate, smooth, etc). Returns descriptors with the "
-            "kind, label, parameter schema, and any optional dependencies."
+            "(transform, decimate, smooth, AI source generation, worker "
+            "retopo/texturing, etc). Returns descriptors with kind, label, "
+            "parameter schema, source/worker type, capability status, and "
+            "matching workers."
         )
     )
     def list_operations() -> list[dict[str, Any]]:
-        ctx = get_context()
-        return [d.model_dump(mode="json") for d in ctx.operations.descriptors()]
+        return _operation_descriptors_payload()
+
+    @server.resource(
+        "ghostforge://operations",
+        name="operation_descriptors",
+        description=(
+            "Inspectable Ghost Forge authoring operation descriptors with "
+            "source/worker type and capability status."
+        ),
+        mime_type="application/json",
+    )
+    def operation_descriptors_resource() -> dict[str, Any]:
+        return {"operations": _operation_descriptors_payload()}
 
     @server.tool(
         description=(
@@ -1609,15 +1717,41 @@ def register_tools(server: FastMCP) -> None:
         ctx = get_context()
         return [g.model_dump(mode="json") for g in ctx.graphs.list()]
 
+    @server.resource(
+        "ghostforge://graphs",
+        name="edit_graphs",
+        description="Inspectable list of persisted Ghost Forge edit graphs.",
+        mime_type="application/json",
+    )
+    def edit_graphs_resource() -> dict[str, Any]:
+        return {"graphs": list_edit_graphs()}
+
     @server.tool(description="Fetch one edit graph plus its last evaluation report (if any).")
     def get_edit_graph(graph_id: str) -> dict[str, Any]:
+        return _graph_with_evaluation_payload(graph_id)
+
+    @server.resource(
+        "ghostforge://graphs/{graph_id}",
+        name="edit_graph",
+        description="Inspectable edit graph resource with its last evaluation report.",
+        mime_type="application/json",
+    )
+    def edit_graph_resource(graph_id: str) -> dict[str, Any]:
+        return _graph_with_evaluation_payload(graph_id)
+
+    @server.resource(
+        "ghostforge://graphs/{graph_id}/evaluation",
+        name="edit_graph_evaluation",
+        description="Last evaluation report for a persisted edit graph.",
+        mime_type="application/json",
+    )
+    def edit_graph_evaluation_resource(graph_id: str) -> dict[str, Any]:
         ctx = get_context()
-        graph = ctx.graphs.load(graph_id)
         evaluation = ctx.graphs.load_evaluation(graph_id)
-        out: dict[str, Any] = {"graph": graph.model_dump(mode="json")}
-        if evaluation is not None:
-            out["evaluation"] = evaluation.model_dump(mode="json")
-        return out
+        return {
+            "graph_id": graph_id,
+            "evaluation": None if evaluation is None else evaluation.model_dump(mode="json"),
+        }
 
     @server.tool(description="Delete an edit graph and its evaluation report.")
     def delete_edit_graph(graph_id: str) -> dict[str, Any]:
@@ -1749,17 +1883,23 @@ def register_tools(server: FastMCP) -> None:
         from ghostforge_core.manifest import apply_side_effects_to_manifest
 
         ctx = get_context()
-        graph = ctx.graphs.load(graph_id)
+        graph = _graph_with_overrides(
+            ctx.graphs.load(graph_id),
+            input_path=input_path,
+            output_path=output_path,
+        )
+        ctx.graphs.save(graph)
         result, _ = evaluate_op(
             graph,
             registry=ctx.operations,
-            input_path=input_path,
-            output_path=output_path,
+            input_path=None,
+            output_path=None,
             output_format=output_format,
             fail_fast=fail_fast,
         )
         ctx.graphs.save_evaluation(result)
         payload = result.model_dump(mode="json")
+        payload["graph"] = graph.model_dump(mode="json")
         side_effects = (result.metadata or {}).get("side_effects") or []
         if manifest_dir and side_effects:
             try:
@@ -1771,6 +1911,34 @@ def register_tools(server: FastMCP) -> None:
             except Exception as exc:
                 payload["manifest_error"] = str(exc)
         return payload
+
+    @server.tool(
+        description=(
+            "Submit an edit-graph evaluation job. Use this for long-running "
+            "graphs that invoke AI workers; poll with `get_job`, stream with "
+            "`wait_for_job`, then inspect `ghostforge://graphs/{graph_id}/evaluation`."
+        )
+    )
+    def submit_evaluate_edit_graph(
+        graph_id: str,
+        input_path: str | None = None,
+        output_path: str | None = None,
+        output_format: str = "glb",
+        fail_fast: bool = False,
+        manifest_dir: str | None = None,
+        asset_id: str | None = None,
+    ) -> dict[str, Any]:
+        spec = EvaluateGraphRequest(
+            graph_id=graph_id,
+            input_path=Path(input_path) if input_path else None,
+            output_path=Path(output_path) if output_path else None,
+            output_format=output_format,
+            fail_fast=fail_fast,
+            manifest_dir=Path(manifest_dir) if manifest_dir else None,
+            asset_id=asset_id,
+        )
+        handle = get_context().runner.submit("evaluate_edit_graph", spec)
+        return handle.model_dump(mode="json")
 
     @server.tool(
         description=(
@@ -1797,7 +1965,12 @@ def register_tools(server: FastMCP) -> None:
         from ghostforge_core.manifest import apply_side_effects_to_manifest
 
         core = get_context()
-        graph = core.graphs.load(graph_id)
+        graph = _graph_with_overrides(
+            core.graphs.load(graph_id),
+            input_path=input_path,
+            output_path=output_path,
+        )
+        core.graphs.save(graph)
 
         loop = asyncio.get_event_loop()
         last_event: dict[str, Any] | None = None
@@ -1810,8 +1983,8 @@ def register_tools(server: FastMCP) -> None:
                 for event in evaluate_graph_streaming(
                     graph,
                     registry=core.operations,
-                    input_path=input_path,
-                    output_path=output_path,
+                    input_path=None,
+                    output_path=None,
                     output_format=output_format,
                     fail_fast=fail_fast,
                 ):
@@ -1849,12 +2022,15 @@ def register_tools(server: FastMCP) -> None:
 
         result_payload: dict[str, Any] | None = None
         if last_event is not None and last_event.get("event") == "completed":
-            result_payload = last_event.get("result")
+            raw_result = last_event.get("result")
+            result_payload = dict(raw_result or {}) if isinstance(raw_result, dict) else raw_result
             try:
-                final = EvaluationResult.model_validate(result_payload)
+                final = EvaluationResult.model_validate(raw_result)
                 core.graphs.save_evaluation(final)
             except Exception:
                 pass
+            if isinstance(result_payload, dict):
+                result_payload["graph"] = graph.model_dump(mode="json")
 
             side_effects = (
                 (result_payload or {}).get("metadata", {}).get("side_effects") or []

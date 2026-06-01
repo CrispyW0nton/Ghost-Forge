@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ghostforge_core.authoring import EditGraph
 from ghostforge_core.types import utc_now
 from ghostforge_qt.models.scene_model import SceneObjectRecord, TransformState
 
@@ -99,6 +100,7 @@ def _record_to_dict(record: SceneObjectRecord) -> dict[str, Any]:
         "watertight": record.watertight,
         "transform": _transform_to_dict(record.transform),
         "operations": list(record.operations),
+        "operation_graph": _graph_to_dict(record.operation_graph),
     }
 
 
@@ -117,7 +119,22 @@ def _record_from_dict(payload: dict[str, Any]) -> SceneObjectRecord:
         visible=bool(payload.get("visible", True)),
         transform=_transform_from_dict(payload.get("transform") or {}),
         operations=tuple(str(item) for item in payload.get("operations") or ()),
+        operation_graph=_graph_from_dict(payload.get("operation_graph")),
     )
+
+
+def _graph_to_dict(graph: EditGraph | None) -> dict[str, Any] | None:
+    if graph is None:
+        return None
+    return graph.model_dump(mode="json")
+
+
+def _graph_from_dict(payload: Any) -> EditGraph | None:
+    if payload in (None, ""):
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError("operation_graph must be an object")
+    return EditGraph.model_validate(payload)
 
 
 def _transform_to_dict(transform: TransformState) -> dict[str, list[float]]:

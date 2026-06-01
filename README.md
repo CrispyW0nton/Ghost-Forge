@@ -36,6 +36,8 @@ Ghost Forge is not trying to clone Blender or Maya overnight. Its credible wedge
 - Editable mesh core foundation with stable vertex/edge/face IDs, adjacency, validation, connected components, and delta undo/redo.
 - Worker registry with honest probes for TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, SyncMVD, silhouette image-to-3D, and stubs.
 - Hosted Tripo AI text-to-3D worker exposed as `tripo_api`, gated by server-side credentials.
+- Core-owned authoring graphs with text/image generation source nodes, worker refine/texture nodes, persisted graph resources, and durable `evaluate_edit_graph` jobs.
+- Qt operation-graph dock that submits graph evaluations as background jobs, then updates the scene, manifest, and node statuses when the job completes.
 - MCP tools for worker probing, text/image generation, texture/refine jobs, audits, vertical slices, edit graphs, retarget planning, and Unity/Unreal handoff.
 - Asset manifests with geometry summaries, provenance, license, concept citations, validation summaries, engine targets, and bridge package history.
 - Offline export bridge packages for Unity-MCP-Ghost and Unreal-MCP-Ghost.
@@ -101,7 +103,7 @@ Near-term slices:
 2. Transform gizmo: move/rotate/scale handles, snapping, pivot/orientation modes.
 3. UV workspace MVP: 2D UV viewport, seam marking, unwrap, pack, checker, distortion overlay.
 4. Material/texture inspector: PBR slots, texture previews, provenance, material assignment.
-5. Operation/modifier graph: core-owned non-destructive stack for modeling and repair.
+5. Operation/modifier graph polish: descriptor-driven parameter editors, artifact links, manifest/audit badges, and result history.
 6. AI worker manager: dependency probes, install/cache UI, hosted provider credentials, sample generation tests.
 7. Hosted Tripo generation: smart mesh presets, vertical-slice generation extras, Unity/Unreal bridge routing.
 8. Sculpt/retopo foundation: brushes, masking, remesh/decimate/retopo, projection, baking.
@@ -148,7 +150,7 @@ python -m pip install -e ".[ai]"
 Latest full Python verification:
 
 ```text
-553 passed, 3 skipped
+569 passed, 3 skipped
 ```
 
 Frontend/Electron work still requires the older Node pipeline. The Qt editor is the forward architecture.

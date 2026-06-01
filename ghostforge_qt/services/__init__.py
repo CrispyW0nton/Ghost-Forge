@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .core_bridge import CoreBridge, EngineRow, RuntimeSnapshot, WorkerRow
+from .core_bridge import CoreBridge, EngineRow, OperationRow, RuntimeSnapshot, WorkerRow
 from .editable_mesh import (
     EditableEdge,
     EditableFace,
@@ -35,6 +35,7 @@ __all__ = [
     "MeshOperationSelection",
     "MeshOperationService",
     "OperationHistory",
+    "OperationRow",
     "ProjectService",
     "ProjectState",
     "RuntimeSnapshot",

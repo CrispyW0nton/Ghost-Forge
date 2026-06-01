@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6 import QtCore
 
+from ghostforge_core.authoring import EditGraph
 from ghostforge_core.types import MeshInfo
 
 
@@ -29,6 +30,7 @@ class SceneObjectRecord:
     asset_dir: Path | None = None
     manifest_path: Path | None = None
     operations: tuple[str, ...] = ()
+    operation_graph: EditGraph | None = None
 
 
 class SceneTableModel(QtCore.QAbstractTableModel):
@@ -148,7 +150,7 @@ class SceneTableModel(QtCore.QAbstractTableModel):
     def update_transform(self, object_id: str, transform: TransformState) -> SceneObjectRecord | None:
         return self.update_record(object_id, transform=transform)
 
-    def append_operation(self, object_id: str, label: str, *, path: Path | None = None, vertices: int | None = None, faces: int | None = None, watertight: bool | None = None, asset_dir: Path | None = None, manifest_path: Path | None = None) -> SceneObjectRecord | None:
+    def append_operation(self, object_id: str, label: str, *, path: Path | None = None, vertices: int | None = None, faces: int | None = None, watertight: bool | None = None, asset_dir: Path | None = None, manifest_path: Path | None = None, operation_graph: EditGraph | None = None) -> SceneObjectRecord | None:
         for row in self._rows:
             if row.object_id == object_id:
                 ops = (*row.operations, label)
@@ -161,6 +163,7 @@ class SceneTableModel(QtCore.QAbstractTableModel):
                     watertight=row.watertight if watertight is None else watertight,
                     asset_dir=row.asset_dir if asset_dir is None else asset_dir,
                     manifest_path=row.manifest_path if manifest_path is None else manifest_path,
+                    operation_graph=row.operation_graph if operation_graph is None else operation_graph,
                 )
         return None
 

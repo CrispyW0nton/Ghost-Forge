@@ -56,7 +56,18 @@ Strong foundations:
 
 Current gap:
 
-Ghost Forge is a real Qt editor foundation, not yet a real DCC. It needs durable scene files, interactive picking, GPU viewport rendering, sub-object edit mode, a true editable mesh data model, UV editor, material system, modifier/operation graph, sculpt/retopo workflows, animation/rigging editors, and mature interchange before it can compete with mature tools.
+Ghost Forge is a real Qt editor foundation, not yet a real DCC. It now has early scene persistence, viewport picking, selection-aware operations, an editable mesh-core foundation, and graph-native worker operations for generation/refine/texture. It still needs GPU viewport rendering, deeper sub-object edit mode, a full document-owned mesh data model, UV editor, material system, modifier graph UI, sculpt/retopo workflows, animation/rigging editors, and mature interchange before it can compete with mature tools.
+
+Recent progress as of 2026-06-01:
+
+- Worker-backed authoring graph nodes landed for `generate_text_to_3d`, `generate_image_to_3d`, `worker_refine_mesh`, and `worker_texture_mesh`.
+- Authoring graphs can now start from a source operation without a base mesh, while preserving manifests and side-effect metadata for worker outputs.
+- Streaming and buffered evaluation paths share the same source-node semantics, which keeps Qt live preview, MCP progress, and headless automation aligned.
+- Qt now has an operation-graph dock with a model/view palette, node stack, worker capability status, and evaluation path for selected mesh graphs or source-generated meshes.
+- `.gforge` scene documents now round-trip per-object `EditGraph` resources, and Qt mirrors changed/evaluated graphs into the core graph store.
+- MCP now exposes enriched operation descriptors, graph resources, graph evaluation resources, and source-worker graph evaluation with manifest side-effect provenance.
+- Core and MCP now support durable `evaluate_edit_graph` jobs, with progress/result persistence and last-evaluation resources for long-running graph execution.
+- Qt graph evaluation now submits durable jobs, watches terminal job state, and applies successful payloads back into scene objects or new source-generated objects with manifests, topology refresh, operation history, and node status updates.
 
 ## Competitor Capability Map
 
@@ -252,8 +263,9 @@ Acceptance gate:
 7. UV workspace MVP: 2D UV viewport, seam marking, unwrap, pack, checker, distortion overlay.
 8. Material/texture inspector: PBR slots, texture previews, generated texture provenance, material assignment.
 9. Operation/modifier graph: core-owned graph nodes for cleanup/modeling/modifier operations.
-10. AI worker manager: dependency probes, install/cache UI, sample generation tests, and honest capability gates.
-11. Hosted Tripo generation: secure credential surface, smart mesh presets, text-to-3D jobs, vertical-slice generation extras, and Unity/Unreal bridge routing.
+10. Graph operation UI polish: descriptor-driven node parameter forms, per-node artifact links, manifest/audit badges, progress/cancel states, and result history.
+11. AI worker manager: dependency probes, install/cache UI, sample generation tests, and honest capability gates.
+12. Hosted Tripo generation: secure credential surface, smart mesh presets, text-to-3D jobs, vertical-slice generation extras, and Unity/Unreal bridge routing.
 
 ## Design Rules Going Forward
 
@@ -266,10 +278,9 @@ Acceptance gate:
 
 ## Immediate Next Slice
 
-Build a core-owned scene/document schema and wire Qt save/load to it:
+Deepen graph editing UX and background completion handling:
 
-- Add `ghostforge_core.scene` with typed project, scene, object, resource, variant, transform, operation, and manifest-link records.
-- Add tests for import -> transform -> mesh operation -> save -> load -> audit metadata preservation.
-- Connect Qt New/Open/Save Scene actions to the schema.
-- Add a compact document/manifest inspector panel showing selected object ID, source path, active variant, transform, topology summary, UV status, material slots, and manifest link.
-- Update README capability claims after this is working so public product language matches local runnable state.
+- Add parameter editors generated from operation descriptors rather than the current minimal prompt/reference fields.
+- Add in-flight graph progress, failure, cancellation, and retry states to the graph panel, backed by durable job ids.
+- Surface node artifact links and manifest/audit badges directly in the graph panel.
+- Keep graph ids stable across Qt save/open and MCP inspection.

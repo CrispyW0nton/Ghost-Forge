@@ -34,6 +34,31 @@ The existing `ghostforge_core` is correctly aimed at a shared pipeline:
 
 The Qt shell should call this core directly and should not duplicate pipeline code.
 
+### Graph-Native Worker Operations
+
+AI generation, retopology/refinement, and texture generation should be schedulable
+inside the same authoring graph as deterministic mesh cleanup and modeling
+operations. Game-engine tooling principles argue against a hidden side channel:
+every worker step needs stable resource identity, an output directory, manifest
+provenance, validation/audit hooks, and debuggable failure state. Source nodes
+may create the first mesh in a graph, while process nodes must require either a
+base mesh or an earlier source node.
+
+Graphs themselves are resources. A saved scene should not collapse an operation
+graph into a mesh path alone; it should preserve the graph resource and mirror it
+through the core `EditGraphStore` so UI, MCP, audits, and engine packages can all
+refer back to the same authored intent.
+
+Graph evaluation is pipeline work, not a UI callback. Long-running graph
+evaluations, especially those invoking hosted or local AI workers, should run as
+durable jobs with progress, cancellation hooks, persisted graph state, and a
+last evaluation report.
+
+The Qt editor should treat completed graph jobs like asset-pipeline events:
+terminal job payloads update or create scene records, write the scene object's
+final manifest, refresh topology diagnostics, and preserve the graph resource
+for later MCP inspection or engine package creation.
+
 ### Asset Contract
 
 Every generated or imported asset should move toward:
@@ -72,6 +97,10 @@ Do not present TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, or SyncMVD as 
 ## First Tests To Add
 
 - Manifest creation after every user-visible export/generation path.
+- Graph evaluations that start from worker source nodes and still emit manifests.
+- Scene persistence that keeps operation graph resources attached to scene objects.
+- Durable graph-evaluation jobs that persist progress, result payloads, and last evaluation reports.
+- Qt completion handling for graph-evaluation jobs that updates the scene and manifest from the durable job payload.
 - Audit gates block engine handoff unless forced.
 - Worker probe state is rendered accurately in the Qt model.
 - A failed model worker leaves a durable failed job with logs and no partial success badge.

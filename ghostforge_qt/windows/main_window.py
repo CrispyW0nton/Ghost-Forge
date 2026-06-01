@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
+from ghostforge_core.authoring import EditGraph, SOURCE_OPERATION_KINDS
 from ghostforge_core.manifest import ManifestBuilder, ProvenanceStep
 from ghostforge_qt.actions import DEFAULT_ACTIONS, ActionRegistry
 from ghostforge_qt.models.scene_model import SceneObjectRecord, SceneTableModel
@@ -11,6 +12,7 @@ from ghostforge_qt.panels import (
     ContentBrowserPanel,
     JobPanel,
     ModelingToolsPanel,
+    OperationGraphPanel,
     PlaceholderPanel,
     SceneOutlinerPanel,
     ThemePanel,
@@ -46,6 +48,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_scene_path: Path | None = None
         self.mesh_selection = MeshSelectionState()
         self.operation_history = OperationHistory()
+        self._graph_job_contexts: dict[str, dict[str, object]] = {}
         self.current_topology: MeshTopologySummary | None = None
         self.theme_manager = ThemeManager(self)
         self.viewport = ViewportHost(parent=self)
@@ -136,6 +139,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scene_panel = SceneOutlinerPanel(self.scene_model, self)
         self.content_panel = ContentBrowserPanel(self.project_service, self)
         self.modeling_panel = ModelingToolsPanel(self)
+        self.operation_graph_panel = OperationGraphPanel(self.bridge, self)
         self.worker_panel = WorkerPanel(self.bridge, self)
         self.job_panel = JobPanel(self.job_controller, self)
         self.theme_panel = ThemePanel(self.theme_manager, self)
@@ -153,6 +157,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._add_dock("Scene", self.scene_panel, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Content", self.content_panel, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Modeling", self.modeling_panel, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._add_dock("Graph", self.operation_graph_panel, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Workers", self.worker_panel, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Jobs", self.job_panel, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Properties", self.properties_panel, QtCore.Qt.DockWidgetArea.RightDockWidgetArea)
@@ -181,6 +186,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewport.itemPicked.connect(self._viewport_pick_requested)
         self.modeling_panel.toolRequested.connect(self._modeling_tool_requested)
         self.modeling_panel.transformEdited.connect(self._apply_transform_to_selection)
+        self.operation_graph_panel.evaluateRequested.connect(self._evaluate_operation_graph)
+        self.operation_graph_panel.graphChanged.connect(self._operation_graph_changed)
+        self.job_controller.jobsChanged.connect(self._graph_jobs_changed)
         self.content_panel.fileActivated.connect(lambda path: self.import_mesh(Path(path)))
         self.theme_manager.themeChanged.connect(self.viewport.apply_theme)
 
@@ -190,8 +198,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mesh_selection.clear()
         self.mesh_selection.active_object_id = None
         self.operation_history.clear()
+        self._graph_job_contexts.clear()
         self.current_scene_path = None
         self.current_topology = None
+        self.operation_graph_panel.set_active_object(None)
+        self.operation_graph_panel.reset_graph()
         self._refresh_mesh_status()
         self._update_window_title()
         self.statusBar().showMessage("New scene")
@@ -248,6 +259,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(
             f"Workers: {len(snapshot.workers)} | Jobs: {len(snapshot.jobs)} | KB: {snapshot.kb_count}"
         )
+        self.operation_graph_panel.refresh()
 
     @QtCore.Slot(str)
     def _modeling_tool_requested(self, tool_name: str) -> None:
@@ -312,6 +324,185 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(
                 f"{tool_name.replace('_', ' ').title()} applied: {output.path.name}"
             )
+
+    @QtCore.Slot()
+    def _evaluate_operation_graph(self) -> None:
+        graph = self.operation_graph_panel.graph()
+        if not graph.nodes:
+            self.statusBar().showMessage("Add graph nodes before evaluating.")
+            return
+        selected = self._selected_record()
+        has_source_node = any(node.enabled and node.kind in SOURCE_OPERATION_KINDS for node in graph.nodes)
+        if selected is None and not has_source_node:
+            self.statusBar().showMessage("Select a mesh or add a source node before evaluating the graph.")
+            return
+
+        output_path = (
+            self.project_service.root
+            / "outputs"
+            / "graphs"
+            / graph.graph_id
+            / "graph_result.glb"
+        )
+        base_asset_path = None if has_source_node else str(selected.path if selected is not None else "")
+        eval_graph = graph.model_copy(
+            update={
+                "base_asset_path": base_asset_path,
+                "output_path": str(output_path),
+                "asset_id": None if selected is None or has_source_node else selected.object_id,
+                "name": selected.name if selected is not None and not graph.name else graph.name,
+            }
+        )
+        try:
+            handle = self.bridge.submit_authoring_graph_evaluation(
+                eval_graph,
+                output_path=output_path,
+                manifest_dir=self.project_service.root / "assets" / "graph_jobs" / eval_graph.graph_id,
+                asset_id=selected.object_id if selected is not None and not has_source_node else eval_graph.graph_id,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Operation Graph", str(exc))
+            return
+        self._graph_job_contexts[handle.id] = {
+            "graph": eval_graph,
+            "selected_object_id": None if selected is None or has_source_node else selected.object_id,
+            "source_graph": has_source_node or selected is None,
+            "before_path": None if selected is None else selected.path,
+            "before_vertices": None if selected is None else selected.vertices,
+            "before_faces": None if selected is None else selected.faces,
+            "before_watertight": None if selected is None else selected.watertight,
+            "output_path": output_path,
+        }
+        self.job_controller.refresh()
+        self.statusBar().showMessage(f"Graph evaluation submitted: {handle.id[:12]}.")
+
+    @QtCore.Slot(list)
+    def _graph_jobs_changed(self, jobs: list) -> None:  # type: ignore[type-arg]
+        if not self._graph_job_contexts:
+            return
+        by_id = {job.id: job for job in jobs}
+        for job_id in list(self._graph_job_contexts):
+            job = by_id.get(job_id)
+            if job is None or job.status.value not in {"succeeded", "failed", "cancelled"}:
+                continue
+            context = self._graph_job_contexts.pop(job_id)
+            if job.status.value != "succeeded":
+                message = job.error.message if job.error is not None else job.status.value
+                self.statusBar().showMessage(f"Graph job {job.id[:12]} {job.status.value}: {message}")
+                continue
+            self._apply_completed_graph_job(job.result or {}, context)
+
+    def _apply_completed_graph_job(self, result_payload: dict[str, object], context: dict[str, object]) -> None:
+        result = self._evaluation_result_from_payload(result_payload)
+        if result is not None:
+            self.operation_graph_panel.set_evaluation_result(result)
+        output_raw = result_payload.get("output_path")
+        output_path = Path(str(output_raw or context["output_path"]))
+        if not output_path.exists():
+            self.statusBar().showMessage(f"Graph job completed but output is missing: {output_path}")
+            return
+        try:
+            info = self.bridge.mesh_info(output_path)
+        except Exception:
+            info = None
+        graph_payload = result_payload.get("graph")
+        graph = EditGraph.model_validate(graph_payload) if isinstance(graph_payload, dict) else context["graph"]
+        metadata = result_payload.get("metadata") if isinstance(result_payload.get("metadata"), dict) else {}
+        manifest_payload = {
+            "graph_id": graph.graph_id if isinstance(graph, EditGraph) else "",
+            "steps": result_payload.get("steps", []),
+            "side_effects": metadata.get("side_effects") or [],
+            "source_mode": metadata.get("source_mode"),
+        }
+        selected_object_id = context.get("selected_object_id")
+        if selected_object_id is None:
+            record = self.scene_model.add_mesh(output_path, info)
+            record = self.scene_model.update_record(record.object_id, operation_graph=graph) or record
+            updated = self._write_manifest_for_record(
+                record,
+                mesh_path=output_path,
+                operation="evaluate_authoring_graph",
+                operation_parameters=manifest_payload,
+            )
+            self.mesh_selection.active_object_id = updated.object_id
+            self.mesh_selection.selected_object_ids = {updated.object_id}
+            self._select_scene_object(updated.object_id)
+            self._refresh_topology(output_path)
+            self._refresh_mesh_status()
+            self.statusBar().showMessage(f"Graph generated {output_path.name}.")
+            return
+
+        selected = self._record_by_id(str(selected_object_id))
+        if selected is None:
+            self.statusBar().showMessage(f"Graph result ready, but scene object {selected_object_id} is missing.")
+            return
+        updated = self.scene_model.append_operation(
+            selected.object_id,
+            "evaluate_authoring_graph",
+            path=output_path,
+            vertices=info.vertices if info is not None else selected.vertices,
+            faces=info.faces if info is not None else selected.faces,
+            watertight=info.watertight if info is not None else selected.watertight,
+            operation_graph=graph if isinstance(graph, EditGraph) else selected.operation_graph,
+        )
+        if updated is not None:
+            updated = self._write_manifest_for_record(
+                updated,
+                mesh_path=output_path,
+                operation="evaluate_authoring_graph",
+                operation_parameters=manifest_payload,
+            )
+            self.operation_history.record(
+                ScenePathCommand(
+                    label="evaluate_authoring_graph",
+                    object_id=selected.object_id,
+                    before_path=selected.path,
+                    after_path=output_path,
+                    before_vertices=context.get("before_vertices"),
+                    before_faces=context.get("before_faces"),
+                    before_watertight=context.get("before_watertight"),
+                    after_vertices=updated.vertices,
+                    after_faces=updated.faces,
+                    after_watertight=updated.watertight,
+                )
+            )
+        self.viewport.set_scene_records(self.scene_model.records())
+        self._refresh_topology(output_path)
+        self.mesh_selection.clear_subobjects()
+        self.mesh_selection.selected_object_ids = {selected.object_id}
+        self._refresh_mesh_status()
+        self.statusBar().showMessage(f"Graph evaluated: {output_path.name}.")
+
+    def _evaluation_result_from_payload(self, payload: dict[str, object]):
+        try:
+            from ghostforge_core.authoring import EvaluationResult
+
+            result_payload = {
+                key: payload[key]
+                for key in EvaluationResult.model_fields
+                if key in payload
+            }
+            return EvaluationResult.model_validate(result_payload)
+        except Exception:
+            return None
+
+    @QtCore.Slot(object)
+    def _operation_graph_changed(self, graph) -> None:  # type: ignore[no-untyped-def]
+        selected = self._selected_record()
+        if selected is None:
+            return
+        graph = graph.model_copy(
+            update={
+                "asset_id": selected.object_id,
+                "name": selected.name if not graph.name else graph.name,
+                "base_asset_path": str(selected.path),
+            }
+        )
+        self.scene_model.update_record(selected.object_id, operation_graph=graph)
+        try:
+            self.bridge.save_authoring_graph(graph)
+        except Exception as exc:
+            self.statusBar().showMessage(f"Graph save skipped: {exc}")
 
     @QtCore.Slot(object)
     def _apply_transform_to_selection(self, transform) -> None:  # type: ignore[no-untyped-def]
@@ -457,8 +648,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mesh_selection.active_object_id = selected.object_id
             self.mesh_selection.selected_object_ids = {selected.object_id}
             self.modeling_panel.set_transform(selected.transform)
+            self.operation_graph_panel.set_active_object(selected)
+            self.operation_graph_panel.set_graph(self._graph_for_record(selected), emit=False)
             self._refresh_topology(selected.path)
+        else:
+            self.operation_graph_panel.set_active_object(None)
+            self.operation_graph_panel.reset_graph()
         self._refresh_mesh_status()
+
+    def _graph_for_record(self, record: SceneObjectRecord) -> EditGraph:
+        if record.operation_graph is not None:
+            return record.operation_graph
+        return EditGraph(
+            graph_id=f"{record.object_id}_graph",
+            asset_id=record.object_id,
+            name=f"{record.name} Graph",
+            base_asset_path=str(record.path),
+        )
 
     def _refresh_topology(self, path: Path) -> None:
         try:

@@ -46,8 +46,19 @@ Use tools for actions, resources for inspectable state, and prompts/templates fo
 Immediate Ghost Forge mapping:
 
 - Tools: `submit_text_to_3d`, `submit_image_to_3d`, `create_engine_export_bridge`, `send_to_unity`, `send_to_unreal`, `create_vertical_slice`, `submit_vertical_slice`.
-- Resources to add: worker capability resources, engine bridge readiness resources, project asset manifest resources, Tripo provider status resource.
+- Resources: operation descriptor resource, edit graph list/resource/evaluation resources, worker capability resources, engine bridge readiness resources, project asset manifest resources, Tripo provider status resource.
 - Prompts to add: "generate engine-ready prop", "repair generated mesh for Unity", "prepare Unreal static mesh package".
+
+### Graph MCP Parity
+
+The MCP surface should expose the same authoring graph contract used by Qt:
+
+- `list_operations` must include operation type, source/worker capability, matching workers, and runnable/stub/missing state.
+- Edit graphs are inspectable resources, not just transient tool arguments.
+- Evaluation tools must persist both the graph and the last evaluation report in `EditGraphStore`.
+- Long-running evaluation should be submitted as `evaluate_edit_graph` jobs so agents can poll, wait with progress, and resume through graph/evaluation resources.
+- Source graphs with no base mesh are valid when the first enabled node is a generation source.
+- Worker graph side effects should be written into the final manifest as traceable worker-operation history without leaking provider secrets.
 
 ### Engine MCP Handoff
 
@@ -63,6 +74,8 @@ This keeps provenance, audit, target-engine intent, and failures in Ghost Forge 
 - `list_worker_capabilities` shows hosted text-to-3D as unavailable until a Tripo key is configured.
 - `submit_text_to_3d` returns a job handle and never echoes the key.
 - Generated assets emit `asset_manifest.json` with source prompt, selected worker, smart mesh options, and no secrets.
+- MCP edit graph evaluation can start from an image/text generation source node and still emit graph, worker, and manifest provenance.
+- `submit_evaluate_edit_graph` returns a durable job handle and the final result can be inspected through the graph evaluation resource.
 - Vertical-slice assets can use `strategy="text_to_3d"` with Tripo smart options and still flow through audit and engine handoff stages.
 - Unity/Unreal handoff stays bridge-based unless an adapter transport is explicitly configured.
 

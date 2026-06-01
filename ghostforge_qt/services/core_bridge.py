@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ghostforge_core import CoreConfig, CoreContext, bootstrap
+from ghostforge_core import CoreConfig, CoreContext, EvaluateGraphRequest, bootstrap
+from ghostforge_core.authoring import EditGraph, EvaluationResult, SOURCE_OPERATION_KINDS, evaluate_graph
 from ghostforge_core.operations import mesh_info as mesh_info_op
 from ghostforge_core.types import JobHandle, MeshInfo
 
@@ -31,6 +32,19 @@ class EngineRow:
 
 
 @dataclass(frozen=True)
+class OperationRow:
+    kind: str
+    label: str
+    category: str
+    summary: str
+    operation_type: str
+    capability: str | None
+    status: str
+    workers: tuple[str, ...]
+    params_schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class RuntimeSnapshot:
     data_root: Path
     kb_backend: str
@@ -48,6 +62,13 @@ class CoreBridge:
     core registries directly. This keeps GUI code testable and lets the bridge
     add caching, signals, or process boundaries later.
     """
+
+    WORKER_OPERATION_CAPABILITIES = {
+        "generate_text_to_3d": "text_to_3d",
+        "generate_image_to_3d": "image_to_3d",
+        "worker_refine_mesh": "refine_mesh",
+        "worker_texture_mesh": "texture_mesh",
+    }
 
     def __init__(self, *, config: CoreConfig | None = None, context: CoreContext | None = None) -> None:
         self.context = context or bootstrap(config)
@@ -111,6 +132,45 @@ class CoreBridge:
             )
         return rows
 
+    def list_operations(self) -> list[OperationRow]:
+        workers = self.list_workers()
+        rows: list[OperationRow] = []
+        for descriptor in self.context.operations.descriptors():
+            capability = self.WORKER_OPERATION_CAPABILITIES.get(descriptor.kind)
+            op_type = "source" if descriptor.kind in SOURCE_OPERATION_KINDS else "operation"
+            if capability is not None and op_type != "source":
+                op_type = "worker"
+            worker_matches = (
+                [row for row in workers if capability in row.capabilities]
+                if capability is not None
+                else []
+            )
+            rows.append(
+                OperationRow(
+                    kind=descriptor.kind,
+                    label=descriptor.label,
+                    category=descriptor.category,
+                    summary=descriptor.summary,
+                    operation_type=op_type,
+                    capability=capability,
+                    status=self._operation_status(worker_matches, capability=capability),
+                    workers=tuple(row.name for row in worker_matches),
+                    params_schema=dict(descriptor.params_schema),
+                )
+            )
+        return rows
+
+    def _operation_status(self, workers: list[WorkerRow], *, capability: str | None) -> str:
+        if capability is None:
+            return "available"
+        if any(row.runnable and not row.is_stub for row in workers):
+            return "runnable"
+        if any(row.runnable and row.is_stub for row in workers):
+            return "stub"
+        if workers:
+            return "missing"
+        return "unavailable"
+
     def list_jobs(self, *, limit: int = 50) -> list[JobHandle]:
         return self.context.jobs.list(limit=limit)
 
@@ -126,3 +186,42 @@ class CoreBridge:
 
     def submit(self, kind: str, spec: Any) -> JobHandle:
         return self.context.runner.submit(kind, spec)
+
+    def evaluate_authoring_graph(
+        self,
+        graph: EditGraph,
+        *,
+        input_path: Path | None = None,
+        output_path: Path | None = None,
+    ) -> tuple[EvaluationResult, Any]:
+        self.context.graphs.save(graph)
+        result, mesh = evaluate_graph(
+            graph,
+            registry=self.context.operations,
+            input_path=input_path,
+            output_path=output_path,
+        )
+        self.context.graphs.save_evaluation(result)
+        return result, mesh
+
+    def save_authoring_graph(self, graph: EditGraph) -> EditGraph:
+        return self.context.graphs.save(graph)
+
+    def submit_authoring_graph_evaluation(
+        self,
+        graph: EditGraph,
+        *,
+        input_path: Path | None = None,
+        output_path: Path | None = None,
+        manifest_dir: Path | None = None,
+        asset_id: str | None = None,
+    ) -> JobHandle:
+        self.context.graphs.save(graph)
+        spec = EvaluateGraphRequest(
+            graph_id=graph.graph_id,
+            input_path=input_path,
+            output_path=output_path,
+            manifest_dir=manifest_dir,
+            asset_id=asset_id,
+        )
+        return self.context.runner.submit("evaluate_edit_graph", spec)

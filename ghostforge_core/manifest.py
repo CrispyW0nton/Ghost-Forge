@@ -571,6 +571,29 @@ def apply_side_effects_to_manifest(
             )
             builder.with_custom("lightmap_uv", merged)
             touched = True
+        elif kind == "worker_operation":
+            existing = builder.get_custom("graph_worker_operations", [])
+            history = list(existing) if isinstance(existing, list) else []
+            history.append(
+                {
+                    "operation": entry.get("operation"),
+                    "node_id": entry.get("node_id"),
+                    "asset_dir": entry.get("asset_dir"),
+                    "output_mesh": entry.get("output_mesh"),
+                    "texture_map": entry.get("texture_map"),
+                    "worker": entry.get("worker"),
+                    "manifest_path": entry.get("manifest_path"),
+                    "metadata": entry.get("metadata") or {},
+                }
+            )
+            builder.with_custom("graph_worker_operations", history)
+            output_mesh = entry.get("output_mesh")
+            if output_mesh and Path(output_mesh).exists():
+                builder.add_artifact_from_path(output_mesh, role="worker.output_mesh")
+            texture_map = entry.get("texture_map")
+            if texture_map and Path(texture_map).exists():
+                builder.add_artifact_from_path(texture_map, role="texture.base_color")
+            touched = True
 
     if not touched:
         return None

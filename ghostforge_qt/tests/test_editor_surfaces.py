@@ -6,6 +6,7 @@ import numpy as np
 import trimesh
 from PySide6 import QtCore
 
+from ghostforge_core.authoring import EditGraph, OperationNode
 from ghostforge_qt.models.scene_model import SceneObjectRecord, TransformState
 from ghostforge_qt.panels.content_browser import ContentBrowserPanel
 from ghostforge_qt.panels.modeling_tools import ModelingToolsPanel
@@ -62,6 +63,13 @@ def test_scene_document_service_round_trips_records(tmp_path):
             scale=(2.0, 2.0, 2.0),
         ),
         operations=("normalize_scale",),
+        operation_graph=EditGraph(
+            graph_id="obj_cube_graph",
+            asset_id="obj_cube",
+            name="Cube Graph",
+            base_asset_path=str(tmp_path / "cube.glb"),
+            nodes=(OperationNode(id="n1_recenter", kind="recenter", params={"pivot": "centroid"}),),
+        ),
     )
     scene_path = service.default_scene_path(project_root, "test scene")
 
@@ -76,6 +84,9 @@ def test_scene_document_service_round_trips_records(tmp_path):
     assert restored.transform.translate == (1.0, 2.0, 3.0)
     assert restored.operations == ("normalize_scale",)
     assert restored.manifest_path == record.manifest_path
+    assert restored.operation_graph is not None
+    assert restored.operation_graph.graph_id == "obj_cube_graph"
+    assert restored.operation_graph.nodes[0].kind == "recenter"
 
 
 def test_theme_manager_switches_builtin_themes(qapp):

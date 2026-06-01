@@ -248,3 +248,172 @@ Implementation direction:
 - Expose `submit_text_to_3d` with Tripo H3 smart mesh options.
 - Allow vertical-slice assets to use `strategy="text_to_3d"` with `generation_extras`.
 - Redact secret-shaped fields before writing manifest provenance.
+
+## 2026-06-01 Graph-Native Worker Operations Slice
+
+Continued the DCC roadmap by moving AI generation and worker processing into
+the authoring graph rather than leaving it as a separate job-only pathway.
+
+Book/roadmap principles applied:
+
+- Game-engine asset pipeline design favors explicit resources, manifests,
+  provenance, and debuggable state for every generated artifact.
+- MCP guidance favors narrow schema-first tools over hidden mutable context;
+  graph worker nodes are now durable operations that Qt, MCP, and headless
+  automation can all inspect.
+- Blender/Maya-style modifier/history workflows need generation, retopo, and
+  texturing to participate in the same operation stack as cleanup/modeling.
+
+Added:
+
+- Source operation kinds for text-to-3D and image-to-3D graph nodes.
+- Worker process nodes for mesh refinement/retopo and mesh texturing.
+- Buffered and streaming graph evaluation support for graphs that begin with
+  a source node and have no base mesh.
+- Side-effect metadata linking graph nodes to worker output meshes, texture
+  maps, worker names, asset directories, and emitted manifests.
+
+Verification:
+
+- Focused authoring worker/evaluator tests: 42 passed.
+
+## 2026-06-01 Qt Operation Graph Dock Slice
+
+Moved the new core graph capabilities into the PySide6 editor shell instead of
+leaving them as backend-only affordances.
+
+Book/roadmap principles applied:
+
+- Qt model/view is the right shape for both operation palettes and graph stacks.
+- Widgets stay thin: the panel collects node intent, while `CoreBridge` talks to
+  `ghostforge_core.authoring.evaluate_graph`.
+- Capability honesty belongs in the UI: worker-backed source/process operations
+  now show runnable/stub/missing status derived from the worker registry.
+
+Added:
+
+- `OperationPaletteModel` and `OperationGraphModel` for available operations,
+  graph nodes, parameter snapshots, and evaluation status.
+- `OperationGraphPanel` dock with operation palette, node stack, prompt/reference
+  fields, worker selection, add/remove, refresh, and evaluate commands.
+- Main-window graph evaluation for selected-mesh process graphs and source-node
+  graphs that create a new scene object.
+- Manifest provenance for graph evaluations, including graph id, node steps,
+  source mode, and worker side effects.
+
+Verification so far:
+
+- Focused Qt bridge/model/main-window tests: 15 passed.
+
+## 2026-06-01 Scene Graph Persistence Slice
+
+Turned the operation graph from a transient Qt panel state into durable scene
+and core graph data.
+
+Book/roadmap principles applied:
+
+- Qt scene save/open should preserve user intent, not only baked artifacts.
+- Game-engine resource architecture treats graphs as authored resources with
+  identity, persistence, and repeatable evaluation.
+- Keeping graphs in the `.gforge` scene and the core `EditGraphStore` gives the
+  future MCP surface the same graph ids and node stacks the desktop editor uses.
+
+Added:
+
+- Optional per-object `EditGraph` on `SceneObjectRecord`.
+- `.gforge` serialization/deserialization for operation graphs.
+- `CoreBridge.save_authoring_graph` plus automatic graph/evaluation persistence
+  when Qt evaluates a graph.
+- Main-window wiring that stores graph edits on the selected scene object and
+  restores the graph dock when reopening a saved scene.
+
+Verification so far:
+
+- Focused Qt scene/graph tests: 37 passed.
+
+## 2026-06-01 MCP Graph Parity Slice
+
+Extended the MCP surface so AI agents can inspect and evaluate the same
+authoring graphs now used by Qt.
+
+Book/roadmap principles applied:
+
+- MCP tools mutate and resources expose durable inspectable state.
+- Capability honesty applies to graph operations, not only standalone worker
+  job submission.
+- Source-worker graph evaluation must preserve graph ids, worker side effects,
+  output paths, and manifest provenance so engine handoff can trust the result.
+
+Added:
+
+- Enriched `list_operations` payloads with operation type, capability,
+  capability status, and matching worker probe state.
+- MCP resources for operation descriptors, graph list, graph detail, and last
+  graph evaluation.
+- Graph evaluation persistence when MCP callers pass input/output overrides.
+- Manifest side-effect handling for worker graph operations under
+  `custom['graph_worker_operations']`, plus worker output/texture artifacts.
+- End-to-end MCP test for evaluating an image-to-3D source graph without a base
+  mesh and applying worker side effects to the final manifest.
+
+Verification so far:
+
+- Focused MCP graph/worker tests: 20 passed.
+
+## 2026-06-01 Graph Evaluation Jobs Slice
+
+Moved graph evaluation onto the shared durable job runner so long-running worker
+graphs can be submitted, monitored, and resumed by MCP and Qt-facing services.
+
+Book/roadmap principles applied:
+
+- Game-engine tools should keep pipeline work outside the UI loop and preserve
+  progress/results in durable stores.
+- MCP agents need job ids and resources for resuming context instead of relying
+  on a synchronous call staying open.
+- Worker-backed graph operations now receive the job reporter/cancel token
+  through `OperationContext`, keeping progress and cooperative cancellation
+  available as graph execution grows heavier.
+
+Added:
+
+- `EvaluateGraphRequest` and `run_evaluate_graph` job handler.
+- Bootstrap registration for `evaluate_edit_graph` as both a core registry
+  operation and a job-runner kind.
+- MCP `submit_evaluate_edit_graph` tool that returns a durable job handle.
+- Qt `CoreBridge.submit_authoring_graph_evaluation` hook for non-blocking graph
+  evaluation wiring.
+- Core test proving graph jobs persist output and last evaluation state.
+
+Verification so far:
+
+- Focused graph job/MCP/Qt bridge tests: 20 passed.
+
+## 2026-06-01 Qt Graph Job Completion Slice
+
+Connected the Qt operation-graph dock to durable job completion so graph
+evaluation no longer behaves like a blocking UI callback.
+
+Book/roadmap principles applied:
+
+- Qt widgets remain thin and receive completed state through controller/service
+  boundaries.
+- Game-engine pipeline work should emit durable job payloads that can update
+  resources, manifests, diagnostics, and history after the fact.
+- Graph jobs are shared core resources, so the same result can be inspected by
+  Qt, MCP, tests, and future engine handoff flows.
+
+Added:
+
+- Main-window tracking for submitted graph evaluation job ids.
+- Completion handling that applies successful graph jobs back into selected
+  scene objects or creates source-generated scene objects.
+- Manifest/provenance writes, topology refresh, graph panel status updates, and
+  undo history entries from durable graph job payloads.
+- Qt tests that poll the job controller until graph jobs settle before checking
+  scene and manifest state.
+
+Verification so far:
+
+- Focused Qt graph completion tests: 12 passed.
+- Full project verification after README/roadmap updates: 569 passed, 3 skipped.

@@ -34,6 +34,7 @@ from .schema import (
     StepStatus,
     utc_now,
 )
+from .workers import SOURCE_OPERATION_KINDS
 
 
 def evaluate_graph(
@@ -44,6 +45,8 @@ def evaluate_graph(
     output_path: str | Path | None = None,
     output_format: str = "glb",
     fail_fast: bool = False,
+    reporter: Any | None = None,
+    cancel: Any | None = None,
 ) -> tuple[EvaluationResult, trimesh.Trimesh | None]:
     """Run a graph over its base asset and return the evaluation report.
 
@@ -57,9 +60,7 @@ def evaluate_graph(
     src = _resolve_input(graph, input_path)
     steps: list[EvaluationStep] = []
 
-    if src is None:
-        # Allow graphs to operate on programmatically-supplied meshes
-        # via direct calls; the HTTP/MCP paths always pass a path.
+    if src is None and not _has_enabled_source_node(graph):
         return (
             EvaluationResult(
                 graph_id=graph.graph_id,
@@ -75,30 +76,11 @@ def evaluate_graph(
             None,
         )
 
-    try:
-        loaded = trimesh.load(str(src), process=False, force="mesh")
-    except Exception as exc:
-        return (
-            EvaluationResult(
-                graph_id=graph.graph_id,
-                status="failed",
-                output_path=None,
-                output_format=output_format,
-                steps=tuple(steps),
-                started_at=started,
-                finished_at=utc_now(),
-                duration_ms=(time.perf_counter() - started_clock) * 1000,
-                metadata={"error": f"failed to load {src!s}: {exc}"},
-            ),
-            None,
-        )
-
-    if isinstance(loaded, trimesh.Scene):
-        # Concatenate scene geometry into a single mesh — operations
-        # are mesh-scoped at this layer; multi-mesh authoring is on
-        # the P12 roadmap (cross-engine retargeting).
-        meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
-        if not meshes:
+    mesh: trimesh.Trimesh | None = None
+    if src is not None:
+        try:
+            loaded = trimesh.load(str(src), process=False, force="mesh")
+        except Exception as exc:
             return (
                 EvaluationResult(
                     graph_id=graph.graph_id,
@@ -109,28 +91,49 @@ def evaluate_graph(
                     started_at=started,
                     finished_at=utc_now(),
                     duration_ms=(time.perf_counter() - started_clock) * 1000,
-                    metadata={"error": "scene has no Trimesh geometry"},
+                    metadata={"error": f"failed to load {src!s}: {exc}"},
                 ),
                 None,
             )
-        mesh = trimesh.util.concatenate(meshes)
-    else:
-        mesh = loaded
-    if not isinstance(mesh, trimesh.Trimesh):
-        return (
-            EvaluationResult(
-                graph_id=graph.graph_id,
-                status="failed",
-                output_path=None,
-                output_format=output_format,
-                steps=tuple(steps),
-                started_at=started,
-                finished_at=utc_now(),
-                duration_ms=(time.perf_counter() - started_clock) * 1000,
-                metadata={"error": f"unexpected mesh type {type(mesh).__name__}"},
-            ),
-            None,
-        )
+
+        if isinstance(loaded, trimesh.Scene):
+            # Concatenate scene geometry into a single mesh — operations
+            # are mesh-scoped at this layer; multi-mesh authoring is on
+            # the P12 roadmap (cross-engine retargeting).
+            meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
+            if not meshes:
+                return (
+                    EvaluationResult(
+                        graph_id=graph.graph_id,
+                        status="failed",
+                        output_path=None,
+                        output_format=output_format,
+                        steps=tuple(steps),
+                        started_at=started,
+                        finished_at=utc_now(),
+                        duration_ms=(time.perf_counter() - started_clock) * 1000,
+                        metadata={"error": "scene has no Trimesh geometry"},
+                    ),
+                    None,
+                )
+            mesh = trimesh.util.concatenate(meshes)
+        else:
+            mesh = loaded
+        if not isinstance(mesh, trimesh.Trimesh):
+            return (
+                EvaluationResult(
+                    graph_id=graph.graph_id,
+                    status="failed",
+                    output_path=None,
+                    output_format=output_format,
+                    steps=tuple(steps),
+                    started_at=started,
+                    finished_at=utc_now(),
+                    duration_ms=(time.perf_counter() - started_clock) * 1000,
+                    metadata={"error": f"unexpected mesh type {type(mesh).__name__}"},
+                ),
+                None,
+            )
 
     out_path = _resolve_output(graph, output_path, output_format)
     eval_output_dir = out_path.parent if out_path is not None else None
@@ -138,6 +141,8 @@ def evaluate_graph(
 
     overall_status: StepStatus = "succeeded"
     for node in graph.nodes:
+        if cancel is not None:
+            cancel.throw_if_cancelled()
         if not node.enabled:
             steps.append(
                 EvaluationStep(
@@ -173,6 +178,8 @@ def evaluate_graph(
             graph_id=graph.graph_id,
             output_dir=eval_output_dir,
             side_effects=side_effects,
+            reporter=reporter,
+            cancel=cancel,
         )
         node_started = time.perf_counter()
         try:
@@ -232,7 +239,7 @@ def evaluate_graph(
             )
         )
 
-    if out_path is not None and overall_status != "failed":
+    if out_path is not None and overall_status != "failed" and mesh is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             mesh.export(str(out_path))
@@ -259,11 +266,7 @@ def evaluate_graph(
             started_at=started,
             finished_at=finished,
             duration_ms=(time.perf_counter() - started_clock) * 1000,
-            metadata={
-                "vertices": int(len(mesh.vertices)),
-                "faces": int(len(mesh.faces)),
-                "side_effects": list(side_effects),
-            },
+            metadata=_mesh_metadata(mesh, side_effects, src=src),
         ),
         mesh,
     )
@@ -272,6 +275,19 @@ def evaluate_graph(
 def _resolve_input(graph: EditGraph, override: str | Path | None) -> Path | None:
     src: Any = override or graph.base_asset_path
     return Path(src) if src else None
+
+
+def _has_enabled_source_node(graph: EditGraph) -> bool:
+    return any(node.enabled and node.kind in SOURCE_OPERATION_KINDS for node in graph.nodes)
+
+
+def _mesh_metadata(mesh: trimesh.Trimesh | None, side_effects: list[dict[str, Any]], *, src: Path | None) -> dict[str, Any]:
+    return {
+        "vertices": int(len(mesh.vertices)) if mesh is not None else 0,
+        "faces": int(len(mesh.faces)) if mesh is not None else 0,
+        "side_effects": list(side_effects),
+        "source_mode": "operation" if src is None else "base_asset",
+    }
 
 
 def _resolve_output(
@@ -302,6 +318,8 @@ def evaluate_graph_streaming(
     output_path: str | Path | None = None,
     output_format: str = "glb",
     fail_fast: bool = False,
+    reporter: Any | None = None,
+    cancel: Any | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield evaluation events as the graph runs.
 
@@ -340,11 +358,7 @@ def evaluate_graph_streaming(
             metadata=(
                 {"error": error}
                 if error is not None
-                else {
-                    "vertices": int(len(mesh.vertices)) if mesh is not None else 0,
-                    "faces": int(len(mesh.faces)) if mesh is not None else 0,
-                    "side_effects": list(side_effects),
-                }
+                else _mesh_metadata(mesh, side_effects, src=src)
             ),
         )
         return {"event": "completed", "result": result.model_dump(mode="json")}
@@ -356,31 +370,35 @@ def evaluate_graph_streaming(
         "asset_path": str(src) if src is not None else None,
     }
 
-    if src is None:
+    if src is None and not _has_enabled_source_node(graph):
         yield _final("failed", error="no input mesh path on graph or call")
         return
 
-    try:
-        loaded = trimesh.load(str(src), process=False, force="mesh")
-    except Exception as exc:
-        yield _final("failed", error=f"failed to load {src!s}: {exc}")
-        return
-
-    if isinstance(loaded, trimesh.Scene):
-        meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
-        if not meshes:
-            yield _final("failed", error="scene has no Trimesh geometry")
+    mesh: trimesh.Trimesh | None = None
+    if src is not None:
+        try:
+            loaded = trimesh.load(str(src), process=False, force="mesh")
+        except Exception as exc:
+            yield _final("failed", error=f"failed to load {src!s}: {exc}")
             return
-        mesh = trimesh.util.concatenate(meshes)
-    else:
-        mesh = loaded
-    if not isinstance(mesh, trimesh.Trimesh):
-        yield _final("failed", error=f"unexpected mesh type {type(mesh).__name__}")
-        return
+
+        if isinstance(loaded, trimesh.Scene):
+            meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
+            if not meshes:
+                yield _final("failed", error="scene has no Trimesh geometry")
+                return
+            mesh = trimesh.util.concatenate(meshes)
+        else:
+            mesh = loaded
+        if not isinstance(mesh, trimesh.Trimesh):
+            yield _final("failed", error=f"unexpected mesh type {type(mesh).__name__}")
+            return
 
     overall_status: StepStatus = "succeeded"
     total_nodes = max(len(graph.nodes), 1)
     for index, node in enumerate(graph.nodes):
+        if cancel is not None:
+            cancel.throw_if_cancelled()
         progress = (index / total_nodes) * 100.0
 
         if not node.enabled:
@@ -400,8 +418,8 @@ def evaluate_graph_streaming(
                 "duration_ms": 0.0,
                 "message": "node disabled",
                 "progress": progress,
-                "vertex_count": int(len(mesh.vertices)),
-                "face_count": int(len(mesh.faces)),
+                "vertex_count": int(len(mesh.vertices)) if mesh is not None else 0,
+                "face_count": int(len(mesh.faces)) if mesh is not None else 0,
             }
             continue
         if not registry.has(node.kind):
@@ -437,6 +455,8 @@ def evaluate_graph_streaming(
             graph_id=graph.graph_id,
             output_dir=eval_output_dir,
             side_effects=side_effects,
+            reporter=reporter,
+            cancel=cancel,
         )
         node_started = time.perf_counter()
         try:
@@ -540,7 +560,7 @@ def evaluate_graph_streaming(
             "face_count": int(len(mesh.faces)),
         }
 
-    if out_path is not None and overall_status != "failed":
+    if out_path is not None and overall_status != "failed" and mesh is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             mesh.export(str(out_path))

@@ -9,9 +9,10 @@ listings.
 
 Handlers receive an :class:`OperationContext` with the current
 ``trimesh`` object plus a parameter dict (already validated against
-the handler's declared schema). They return a new ``trimesh`` —
-never mutating the input — so the evaluator can rewind cleanly when
-a downstream node fails.
+the handler's declared schema). Source operations such as AI generation
+may receive ``mesh=None`` and return the first mesh in the stack.
+Handlers return a new ``trimesh`` — never mutating the input — so the
+evaluator can rewind cleanly when a downstream node fails.
 """
 
 from __future__ import annotations
@@ -41,12 +42,14 @@ class OperationContext:
     (manifest emitter, UI) can wire them up after the run.
     """
 
-    mesh: trimesh.Trimesh
+    mesh: trimesh.Trimesh | None
     params: dict[str, Any]
     node_id: str
     graph_id: str
     output_dir: Any | None = None
     side_effects: list[dict[str, Any]] | None = None
+    reporter: Any | None = None
+    cancel: Any | None = None
 
 
 class OperationError(RuntimeError):

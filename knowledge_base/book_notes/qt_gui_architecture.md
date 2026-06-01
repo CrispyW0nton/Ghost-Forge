@@ -31,6 +31,7 @@ Use Qt model/view for data-heavy UI:
 - Scene outliner: `QAbstractItemModel` or `QStandardItemModel`, with proxy filtering.
 - Asset browser: filesystem-backed model plus metadata columns.
 - Worker/model registry: table model showing runnable state, license, VRAM, required models, and cache status.
+- Operation graph: palette and stack models over the core authoring registry, including source/process type, worker capability status, node parameters, and evaluation result status.
 - Audit/results panel: tree model grouped by severity and rule.
 - Manifest inspector: editable form mapped to a typed manifest model.
 
@@ -43,6 +44,13 @@ Long-running tasks must never block the UI thread. Use one of:
 - `QProcess` for isolated model workers.
 
 Every job needs progress, cancellation, logs, artifact paths, and a final manifest.
+
+Authoring graph evaluation now follows this rule in the Qt shell: the graph
+panel submits an `evaluate_edit_graph` job through `CoreBridge`, the job panel
+polls durable job state, and the main window applies terminal results back into
+the scene model, graph panel, manifest, topology panel, and undo history. This
+keeps hosted/local worker graph execution out of the event loop while preserving
+the artist-facing edit stack.
 
 ### Dialogs
 
@@ -62,10 +70,24 @@ Ghost Rigger's theme/layout system is a useful model. Ghost Forge should move fr
 
 Qt widgets should not know how to generate meshes, unwrap UVs, or call AI models. They should bind to controllers/services that call `ghostforge_core`.
 
+Operation graph UI follows the same rule: panels list and collect node intent,
+while `CoreBridge` evaluates `ghostforge_core.authoring.EditGraph` through the
+shared operation registry. This keeps the desktop editor, MCP server, and
+headless tests on the same graph contract.
+
+Scene persistence must include graph intent, not only evaluated output paths.
+When a user saves a `.gforge` scene, each object that has a modifier/operation
+graph should retain the graph id, nodes, parameters, base asset, and last-known
+link to the core graph store so reopening the project restores the editable
+stack rather than just the baked mesh.
+
 ## First Tests To Add
 
 - Main-window construction without GPU/model dependencies.
 - QAction registry contains all core commands and shortcuts.
 - Scene model add/select/remove persistence.
 - Worker table correctly displays missing `torch` and stub fallback states.
+- Operation graph model displays available/source/worker nodes and records evaluation status.
+- Scene save/open round-trips per-object operation graphs and restores the graph panel.
 - Job controller emits progress, completion, failure, and cancellation signals.
+- Qt graph jobs update scene objects or create source-generated objects on completion without blocking the UI thread.

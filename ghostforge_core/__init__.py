@@ -107,8 +107,11 @@ from .authoring import (
     OperationError,
     OperationNode,
     OperationRegistry,
+    SOURCE_OPERATION_KINDS,
+    WORKER_OPERATIONS,
     default_operation_registry,
     evaluate_graph,
+    evaluate_graph_streaming,
     make_operation,
 )
 from .gpu import GpuInfo, GpuStatus, detect_gpus
@@ -179,6 +182,7 @@ from .types import (
     utc_now,
 )
 from .validation import Issue, ValidationReport, validate_glb, validate_mesh
+from .operations.authoring import EvaluateGraphRequest
 
 
 @dataclass(frozen=True)
@@ -212,6 +216,7 @@ class CoreContext:
 
 
 def bootstrap(config: CoreConfig | None = None) -> CoreContext:
+    from .operations import authoring as authoring_ops
     from .operations import audit as audit_ops
     from .operations import engines as engine_ops
     from .operations import mesh_info, texture, unwrap
@@ -268,6 +273,7 @@ def bootstrap(config: CoreConfig | None = None) -> CoreContext:
 
     operations.register_all(RETARGET_OPERATIONS)
     graphs = EditGraphStore(storage)
+    authoring_ops.set_runtime(graphs=graphs, operations=operations)
 
     registry.register("mesh_info", mesh_info.run, capabilities=["mesh-info"], version="0.1.0")
     registry.register("unwrap_uvs", unwrap.run, capabilities=["uv", "xatlas"], version="0.1.0")
@@ -302,6 +308,12 @@ def bootstrap(config: CoreConfig | None = None) -> CoreContext:
         capabilities=["vertical-slice", "orchestration"],
         version="0.1.0",
     )
+    registry.register(
+        "evaluate_edit_graph",
+        authoring_ops.run_evaluate_graph,
+        capabilities=["authoring-graph", "non-destructive-modeling"],
+        version="0.1.0",
+    )
 
     runner.register("mesh_info", mesh_info.MeshInfoRequest, mesh_info.run)
     runner.register("unwrap_uvs", UnwrapRequest, unwrap.run)
@@ -316,6 +328,11 @@ def bootstrap(config: CoreConfig | None = None) -> CoreContext:
         "execute_vertical_slice",
         ExecuteVerticalSliceRequest,
         slice_ops.run_execute_slice,
+    )
+    runner.register(
+        "evaluate_edit_graph",
+        EvaluateGraphRequest,
+        authoring_ops.run_evaluate_graph,
     )
     runner.dispatch_pending()
 
@@ -375,8 +392,11 @@ __all__ = [
     "OperationError",
     "OperationNode",
     "OperationRegistry",
+    "SOURCE_OPERATION_KINDS",
+    "WORKER_OPERATIONS",
     "default_operation_registry",
     "evaluate_graph",
+    "evaluate_graph_streaming",
     "make_operation",
     "AssetKind",
     "AssetRunState",
@@ -403,6 +423,7 @@ __all__ = [
     "EngineTransport",
     "Error",
     "ExecuteVerticalSliceRequest",
+    "EvaluateGraphRequest",
     "ExportBridgeError",
     "ExportBridgePackage",
     "FrozenModel",

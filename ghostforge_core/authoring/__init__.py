@@ -35,12 +35,14 @@ from .schema import (
     StepStatus,
 )
 from .store import EditGraphStore, GraphNotFound
+from .workers import SOURCE_OPERATION_KINDS, WORKER_OPERATIONS
 
 
 def default_operation_registry() -> OperationRegistry:
     registry = OperationRegistry()
     registry.register_all(DEFAULT_OPERATIONS)
     registry.register_all(BAKE_OPERATIONS)
+    registry.register_all(WORKER_OPERATIONS)
     return registry
 
 
@@ -58,7 +60,9 @@ __all__ = [
     "OperationError",
     "OperationNode",
     "OperationRegistry",
+    "SOURCE_OPERATION_KINDS",
     "StepStatus",
+    "WORKER_OPERATIONS",
     "default_operation_registry",
     "evaluate_graph",
     "evaluate_graph_streaming",

@@ -71,6 +71,7 @@ Ghost Forge should be:
 - Do not claim production AI generation unless real workers are installed, probed, and passing sample generation tests.
 - Hosted AI workers such as Tripo are production-capable only when their probes confirm server-side credentials and a sample job succeeds.
 - MCP-driven game generation should route through Ghost Forge manifests and engine bridge packages before Unity-MCP-Ghost or Unreal-MCP-Ghost import the asset.
+- Text/image generation, worker retopo/refinement, and worker texturing must be first-class authoring graph operations, not GUI/MCP side channels. Source nodes create the first mesh; process nodes require an input mesh; all worker nodes write manifests and provenance.
 - Build universal asset abstractions. Do not import KOTOR-specific Ghost Rigger assumptions except as optional adapters or inspiration.
 
 ## Definition Of Done For New Features
