@@ -72,6 +72,7 @@ def test_scene_document_service_round_trips_records(tmp_path):
         ),
         operation_graph_history=(
             {
+                "history_id": "obj_cube_graph_succeeded_0",
                 "graph_id": "obj_cube_graph",
                 "status": "succeeded",
                 "output_path": str(tmp_path / "cube_out.glb"),
@@ -80,7 +81,21 @@ def test_scene_document_service_round_trips_records(tmp_path):
                 "audit_badge": "passed",
                 "message": "audit passed",
             },
+            {
+                "history_id": "obj_cube_graph_succeeded_1",
+                "graph_id": "obj_cube_graph",
+                "status": "succeeded",
+                "output_path": str(tmp_path / "cube_blockout.glb"),
+                "duration_ms": 7.0,
+                "artifact_count": 1,
+                "audit_badge": "passed",
+                "message": "blockout passed",
+            },
         ),
+        operation_graph_comparison_pair={
+            "left_history_id": "obj_cube_graph_succeeded_1",
+            "right_history_id": "obj_cube_graph_succeeded_0",
+        },
     )
     scene_path = service.default_scene_path(project_root, "test scene")
 
@@ -88,6 +103,7 @@ def test_scene_document_service_round_trips_records(tmp_path):
     loaded = service.read(scene_path)
 
     assert loaded.path == scene_path
+    assert loaded.scene_id == "test_scene"
     assert loaded.project_root == project_root.resolve()
     assert len(loaded.records) == 1
     restored = loaded.records[0]
@@ -99,6 +115,16 @@ def test_scene_document_service_round_trips_records(tmp_path):
     assert restored.operation_graph.graph_id == "obj_cube_graph"
     assert restored.operation_graph.nodes[0].kind == "recenter"
     assert restored.operation_graph_history[0]["audit_badge"] == "passed"
+    assert restored.operation_graph_history[0]["history_id"] == "obj_cube_graph_succeeded_0"
+    assert restored.operation_graph_history[0]["mcp_links"]["graph"] == "ghostforge://graphs/obj_cube_graph"
+    assert (
+        restored.operation_graph_history[0]["mcp_links"]["scene_object_graph_history"]
+        == restored.operation_graph_history[0]["resource_uri"]
+    )
+    assert restored.operation_graph_comparison_pair == {
+        "left_history_id": "obj_cube_graph_succeeded_1",
+        "right_history_id": "obj_cube_graph_succeeded_0",
+    }
 
 
 def test_theme_manager_switches_builtin_themes(qapp):

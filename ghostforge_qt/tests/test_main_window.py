@@ -349,6 +349,7 @@ def test_main_window_saves_and_reopens_scene_operation_graph(qapp, tmp_path):
         window._operation_graph_changed(window.operation_graph_panel.graph())
         history = (
             {
+                "history_id": "cube_graph_latest",
                 "graph_id": window.operation_graph_panel.graph().graph_id,
                 "status": "succeeded",
                 "output_path": str(tmp_path / "cube_graph_out.glb"),
@@ -357,16 +358,33 @@ def test_main_window_saves_and_reopens_scene_operation_graph(qapp, tmp_path):
                 "audit_badge": "passed",
                 "message": "audit passed",
             },
+            {
+                "history_id": "cube_graph_previous",
+                "graph_id": window.operation_graph_panel.graph().graph_id,
+                "status": "succeeded",
+                "output_path": str(tmp_path / "cube_graph_blockout.glb"),
+                "duration_ms": 5.0,
+                "artifact_count": 1,
+                "audit_badge": "warnings",
+                "message": "blockout warnings",
+            },
         )
+        comparison_pair = {
+            "left_history_id": "cube_graph_previous",
+            "right_history_id": "cube_graph_latest",
+        }
         window.operation_graph_panel.set_history_payloads(history)
+        window.operation_graph_panel.set_history_comparison_pair(comparison_pair)
         window.scene_model.update_record(
             record.object_id,
             operation_graph_history=window.operation_graph_panel.history_payloads(),
+            operation_graph_comparison_pair=window.operation_graph_panel.history_comparison_pair(),
         )
 
         stored = window.scene_model.records()[0]
         assert stored.operation_graph is not None
         assert stored.operation_graph_history == history
+        assert stored.operation_graph_comparison_pair == comparison_pair
         assert bridge.context.graphs.load(stored.operation_graph.graph_id).nodes[0].kind == "recenter"
         window.save_scene(scene_path)
 
@@ -378,10 +396,19 @@ def test_main_window_saves_and_reopens_scene_operation_graph(qapp, tmp_path):
         assert restored.object_id == record.object_id
         assert restored.operation_graph is not None
         assert restored.operation_graph.nodes[0].kind == "recenter"
-        assert restored.operation_graph_history == history
+        assert restored.operation_graph_history[0]["graph_id"] == history[0]["graph_id"]
+        assert restored.operation_graph_history[0]["history_id"] == "cube_graph_latest"
+        assert restored.operation_graph_comparison_pair == comparison_pair
+        assert restored.operation_graph_history[0]["mcp_links"]["graph"] == (
+            f"ghostforge://graphs/{history[0]['graph_id']}"
+        )
+        assert "scene_object_graph_history" in restored.operation_graph_history[0]["mcp_links"]
         assert window.operation_graph_panel.graph().graph_id == restored.operation_graph.graph_id
         assert window.operation_graph_panel.graph_model.rowCount() == 1
-        assert window.operation_graph_panel.history_model.rowCount() == 1
+        assert window.operation_graph_panel.history_model.rowCount() == 2
+        assert window.operation_graph_panel.history_comparison_pair() == comparison_pair
+        assert window.operation_graph_panel.history_compare_left.currentData() == 1
+        assert window.operation_graph_panel.history_compare_right.currentData() == 0
         assert window.operation_graph_panel.history_model.data(
             window.operation_graph_panel.history_model.index(0, 4)
         ) == "passed"

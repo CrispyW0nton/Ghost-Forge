@@ -195,6 +195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.operation_graph_panel.planRetargetGraphRequested.connect(self._plan_graph_result_retarget)
         self.operation_graph_panel.openGraphPathRequested.connect(self._open_graph_result_path)
         self.operation_graph_panel.revealGraphPathRequested.connect(self._reveal_graph_result_path)
+        self.operation_graph_panel.historyComparisonPairChanged.connect(self._operation_graph_comparison_pair_changed)
         self.job_controller.jobsChanged.connect(self._graph_jobs_changed)
         self.content_panel.fileActivated.connect(lambda path: self.import_mesh(Path(path)))
         self.theme_manager.themeChanged.connect(self.viewport.apply_theme)
@@ -644,11 +645,22 @@ class MainWindow(QtWidgets.QMainWindow):
             selected.object_id,
             operation_graph=graph,
             operation_graph_history=self.operation_graph_panel.history_payloads(),
+            operation_graph_comparison_pair=self.operation_graph_panel.history_comparison_pair(),
         )
         try:
             self.bridge.save_authoring_graph(graph)
         except Exception as exc:
             self.statusBar().showMessage(f"Graph save skipped: {exc}")
+
+    @QtCore.Slot(object)
+    def _operation_graph_comparison_pair_changed(self, pair: object) -> None:
+        selected = self._selected_record()
+        if selected is None:
+            return
+        self.scene_model.update_record(
+            selected.object_id,
+            operation_graph_comparison_pair=dict(pair) if isinstance(pair, dict) else {},
+        )
 
     @QtCore.Slot(str)
     def _create_graph_result_engine_bridge(self, target_engine: str) -> Path | None:
@@ -736,6 +748,7 @@ class MainWindow(QtWidgets.QMainWindow):
             selected.object_id,
             operation_graph=graph,
             operation_graph_history=self.operation_graph_panel.history_payloads(),
+            operation_graph_comparison_pair=self.operation_graph_panel.history_comparison_pair(),
         )
         self.bridge.save_authoring_graph(graph)
         self._sync_graph_result_manifest(selected)
@@ -765,6 +778,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scene_model.update_record(
             record.object_id,
             operation_graph_history=self.operation_graph_panel.history_payloads(),
+            operation_graph_comparison_pair=self.operation_graph_panel.history_comparison_pair(),
         )
 
     def _retarget_target_from_history(self, history: tuple[dict[str, object], ...]) -> str:
@@ -784,6 +798,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scene_model.update_record(
             selected.object_id,
             operation_graph_history=self.operation_graph_panel.history_payloads(),
+            operation_graph_comparison_pair=self.operation_graph_panel.history_comparison_pair(),
         )
 
     @QtCore.Slot(object)
@@ -933,11 +948,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.operation_graph_panel.set_active_object(selected)
             self.operation_graph_panel.set_graph(self._graph_for_record(selected), emit=False)
             self.operation_graph_panel.set_history_payloads(selected.operation_graph_history)
+            self.operation_graph_panel.set_history_comparison_pair(selected.operation_graph_comparison_pair)
             self._sync_graph_result_manifest(selected)
             self._refresh_topology(selected.path)
         else:
             self.operation_graph_panel.set_active_object(None)
             self.operation_graph_panel.reset_graph()
+            self.operation_graph_panel.set_history_comparison_pair({})
             self.operation_graph_panel.set_result_manifest(None)
         self._refresh_mesh_status()
 
@@ -1021,6 +1038,7 @@ class MainWindow(QtWidgets.QMainWindow):
         target = path or self.current_scene_path
         if target is None:
             target = self.scene_documents.default_scene_path(self.project_service.root)
+        self._store_selected_graph_history()
         saved = self.scene_documents.write(
             target,
             project_root=self.project_service.root,

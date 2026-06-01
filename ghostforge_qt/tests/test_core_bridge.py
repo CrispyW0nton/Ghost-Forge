@@ -42,6 +42,8 @@ def test_core_bridge_lists_authoring_operations_with_worker_status(tmp_path):
     assert rows["worker_texture_mesh"].operation_type == "worker"
     assert rows["worker_texture_mesh"].capability == "texture_mesh"
     assert rows["worker_texture_mesh"].status in {"runnable", "stub", "missing"}
+    assert rows["worker_texture_mesh"].parameter_presets
+    assert rows["worker_texture_mesh"].parameter_presets[0]["label"] == "Realtime 1K"
 
 
 def test_core_bridge_submits_authoring_graph_evaluation_job(tmp_path):

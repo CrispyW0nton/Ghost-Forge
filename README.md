@@ -37,8 +37,8 @@ Ghost Forge is not trying to clone Blender or Maya overnight. Its credible wedge
 - Worker registry with honest probes for TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, SyncMVD, silhouette image-to-3D, and stubs.
 - Hosted Tripo AI text-to-3D worker exposed as `tripo_api`, gated by server-side credentials.
 - Core-owned authoring graphs with text/image generation source nodes, worker refine/texture nodes, persisted graph resources, and durable `evaluate_edit_graph` jobs.
-- Qt operation-graph dock with descriptor-driven node parameter editing, visible background job progress/cancel/retry states, graph-linked audit jobs, per-node artifact/manifest/audit badges, persistent result history with a model-backed resource list and metadata drill-down for outputs, artifacts, manifests, validation issue lists, provenance step lists, audit issue lists, and bridge package previews, graph result inspector, shared-core Unity/Unreal retarget planning, manifest-gated Unity/Unreal bridge creation, failed-node focus, and scene/manifest/node-status updates on completion.
-- MCP tools for worker probing, text/image generation, texture/refine jobs, audits, vertical slices, edit graphs, retarget planning, and Unity/Unreal handoff.
+- Qt operation-graph dock with descriptor-driven node parameter editing, shared operation presets, file/folder path pickers, button and drag/drop node reordering, per-node enable/disable bypass controls, visible background job progress/cancel/retry states, graph-linked audit jobs, per-node artifact/manifest/audit badges, persistent result history with stable scene/resource IDs, persisted active graph-history comparison pairs, a filterable model-backed resource list and metadata drill-down for outputs, artifacts, manifests, validation issue lists, provenance step lists, audit issue lists, bridge package history, bridge package JSON previews, graph-history delta comparison with non-adjacent pair selection, a summary table, and copyable MCP comparison URIs, shared-core Unity/Unreal retarget planning with model-backed remaining/new/resolved diagnostic diffs, manifest-gated Unity/Unreal bridge creation, failed-node focus, and scene/manifest/node-status updates on completion.
+- MCP tools and prompts for worker probing, text/image generation, texture/refine jobs, audits, vertical slices, edit graphs, graph-history comparison, graph repair workflows, retarget planning, and Unity/Unreal handoff.
 - Asset manifests with geometry summaries, provenance, license, concept citations, validation summaries, engine targets, and bridge package history.
 - Offline export bridge packages for Unity-MCP-Ghost and Unreal-MCP-Ghost.
 - Knowledge base and roadmap grounded in Qt, graphics math, game-engine architecture, MCP, and DCC competitor research.
@@ -103,7 +103,7 @@ Near-term slices:
 2. Transform gizmo: move/rotate/scale handles, snapping, pivot/orientation modes.
 3. UV workspace MVP: 2D UV viewport, seam marking, unwrap, pack, checker, distortion overlay.
 4. Material/texture inspector: PBR slots, texture previews, provenance, material assignment.
-5. Operation/modifier graph polish: descriptor-driven parameter editors, artifact links/actions, manifest/audit badges, persisted result history, graph-result inspectors, persisted retarget diagnostics/comparisons, and engine-readiness actions.
+5. Operation/modifier graph polish: descriptor-driven parameter editors, artifact links/actions, manifest/audit badges, persisted result history and active comparison pairs, graph-result inspectors, persisted retarget diagnostics/comparisons, graph-history deltas with MCP links, and engine-readiness actions.
 6. AI worker manager: dependency probes, install/cache UI, hosted provider credentials, sample generation tests.
 7. Hosted Tripo generation: smart mesh presets, vertical-slice generation extras, Unity/Unreal bridge routing.
 8. Sculpt/retopo foundation: brushes, masking, remesh/decimate/retopo, projection, baking.
@@ -150,7 +150,7 @@ python -m pip install -e ".[ai]"
 Latest full Python verification:
 
 ```text
-593 passed, 3 skipped
+602 passed, 3 skipped
 ```
 
 Frontend/Electron work still requires the older Node pipeline. The Qt editor is the forward architecture.

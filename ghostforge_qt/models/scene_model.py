@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from PySide6 import QtCore
@@ -32,6 +32,7 @@ class SceneObjectRecord:
     operations: tuple[str, ...] = ()
     operation_graph: EditGraph | None = None
     operation_graph_history: tuple[dict[str, object], ...] = ()
+    operation_graph_comparison_pair: dict[str, str] = field(default_factory=dict)
 
 
 class SceneTableModel(QtCore.QAbstractTableModel):
@@ -164,6 +165,7 @@ class SceneTableModel(QtCore.QAbstractTableModel):
         manifest_path: Path | None = None,
         operation_graph: EditGraph | None = None,
         operation_graph_history: tuple[dict[str, object], ...] | None = None,
+        operation_graph_comparison_pair: dict[str, str] | None = None,
     ) -> SceneObjectRecord | None:
         for row in self._rows:
             if row.object_id == object_id:
@@ -182,6 +184,11 @@ class SceneTableModel(QtCore.QAbstractTableModel):
                         row.operation_graph_history
                         if operation_graph_history is None
                         else operation_graph_history
+                    ),
+                    operation_graph_comparison_pair=(
+                        row.operation_graph_comparison_pair
+                        if operation_graph_comparison_pair is None
+                        else operation_graph_comparison_pair
                     ),
                 )
         return None

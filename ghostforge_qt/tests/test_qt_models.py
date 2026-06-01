@@ -7,11 +7,15 @@ from PySide6 import QtCore
 from ghostforge_core.authoring import EvaluationResult, EvaluationStep
 from ghostforge_core.types import MeshInfo
 from ghostforge_qt.models.operation_graph_model import (
+    GraphHistoryDeltaModel,
+    GraphHistoryDeltaRow,
     GraphResultResource,
     GraphResultResourceModel,
     OperationGraphHistoryModel,
     OperationGraphModel,
     OperationPaletteModel,
+    RetargetDiagnosticModel,
+    RetargetDiagnosticRow,
 )
 from ghostforge_qt.models.scene_model import SceneTableModel, TransformState
 from ghostforge_qt.models.worker_model import WorkerTableModel
@@ -135,12 +139,85 @@ def test_operation_graph_model_tracks_nodes_and_results(qapp):
     assert model.rowCount() == 1
     assert model.data(model.index(0, 1)) == "recenter"
     assert model.data(model.index(0, 3)) == "succeeded"
+    disabled = model.set_node_enabled(0, False)
+    assert disabled is not None
+    assert not disabled.enabled
+    assert model.data(model.index(0, 0)) == "no"
+    assert model.data(model.index(0, 3)) == "pending"
+    enabled = model.set_node_enabled(0, True)
+    assert enabled is not None
+    assert enabled.enabled
+    assert model.data(model.index(0, 0)) == "yes"
     updated = model.update_node_params(0, {"pivot": "origin"})
     assert updated is not None
     assert updated.params == {"pivot": "origin"}
     assert model.data(model.index(0, 3)) == "pending"
     assert model.remove_row(0).id == node.id
     assert model.rowCount() == 0
+
+
+def test_operation_graph_model_reorders_nodes_and_resets_results(qapp):
+    first_operation = OperationRow(
+        kind="recenter",
+        label="Recenter",
+        category="transform",
+        summary="",
+        operation_type="operation",
+        capability=None,
+        status="available",
+        workers=(),
+        params_schema={},
+    )
+    second_operation = OperationRow(
+        kind="flip_normals",
+        label="Flip Normals",
+        category="mesh",
+        summary="",
+        operation_type="operation",
+        capability=None,
+        status="available",
+        workers=(),
+        params_schema={},
+    )
+    model = OperationGraphModel()
+    first = model.append_operation(first_operation, {"pivot": "origin"})
+    second = model.append_operation(second_operation, {})
+    model.set_evaluation_result(
+        EvaluationResult(
+            graph_id=model.graph().graph_id,
+            steps=(
+                EvaluationStep(node_id=first.id, kind=first.kind, status="succeeded"),
+                EvaluationStep(node_id=second.id, kind=second.kind, status="succeeded"),
+            ),
+        )
+    )
+
+    moved = model.move_row(1, 0)
+
+    assert moved is not None
+    assert moved.id == second.id
+    assert [node.id for node in model.graph().nodes] == [second.id, first.id]
+    assert model.graph().nodes[1].params == {"pivot": "origin"}
+    assert model.data(model.index(0, 3)) == "pending"
+    assert model.move_row(0, 0) is None
+    assert model.move_row(0, -1) is None
+
+    mime = model.mimeData([model.index(0, 0)])
+    assert model.canDropMimeData(
+        mime,
+        QtCore.Qt.DropAction.MoveAction,
+        model.rowCount(),
+        0,
+        QtCore.QModelIndex(),
+    )
+    assert model.dropMimeData(
+        mime,
+        QtCore.Qt.DropAction.MoveAction,
+        model.rowCount(),
+        0,
+        QtCore.QModelIndex(),
+    )
+    assert [node.id for node in model.graph().nodes] == [first.id, second.id]
 
 
 def test_operation_graph_model_surfaces_node_artifacts_and_manifests(qapp):
@@ -308,6 +385,71 @@ def test_graph_result_resource_model_lists_actionable_paths(qapp):
 
     assert model.rowCount() == 1
     assert model.data(model.index(0, 2)) == "C:/tmp/asset"
+
+
+def test_graph_history_delta_model_lists_comparison_rows(qapp):
+    model = GraphHistoryDeltaModel(
+        [
+            GraphHistoryDeltaRow(
+                area="Audit",
+                item="Warning Count",
+                change="changed",
+                detail="0 -> 1",
+                severity="changed",
+            ),
+            GraphHistoryDeltaRow(
+                area="Resource",
+                item="Bridge Paths",
+                change="added",
+                detail="C:/tmp/ghostforge_bridge_unity.json",
+                severity="added",
+            ),
+        ]
+    )
+
+    assert model.rowCount() == 2
+    assert model.data(model.index(0, 0)) == "Audit"
+    assert model.data(model.index(0, 1)) == "Warning Count"
+    assert model.data(model.index(0, 2)) == "changed"
+    assert model.data(model.index(0, 0), model.AreaRole) == "Audit"
+    assert model.data(model.index(1, 0), model.SeverityRole) == "added"
+    assert "ghostforge_bridge_unity" in model.data(model.index(1, 0), QtCore.Qt.ItemDataRole.ToolTipRole)
+    assert model.row_at(1).item == "Bridge Paths"
+
+    model.set_rows([GraphHistoryDeltaRow("Retarget", "Retarget New", "removed", "retarget.pivot", "removed")])
+
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "Retarget"
+    assert model.data(model.index(0, 3)) == "retarget.pivot"
+
+
+def test_retarget_diagnostic_model_lists_comparison_rows(qapp):
+    model = RetargetDiagnosticModel(
+        [
+            RetargetDiagnosticRow(
+                state="remaining",
+                severity="warning",
+                rule="retarget.units",
+                code="units_scale_required",
+                target="mesh",
+                message="Still needs scale",
+                suggestion="Apply units retarget.",
+                source="after",
+            )
+        ]
+    )
+
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "remaining"
+    assert model.data(model.index(0, 2)) == "retarget.units"
+    assert model.data(model.index(0, 3), model.KeyRole) == "retarget.units:units_scale_required"
+    assert model.row_at(0).source == "after"
+
+    model.set_rows([RetargetDiagnosticRow("resolved", "info", "retarget.axis", "axis_mismatch_assumed")])
+
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "resolved"
+    assert model.data(model.index(0, 3)) == "axis_mismatch_assumed"
 
 
 def test_operation_graph_history_model_appends_planned_payload(qapp):

@@ -132,6 +132,7 @@ def make_operation(
     summary: str = "",
     category: str = "general",
     params_schema: dict[str, Any] | None = None,
+    parameter_presets: tuple[dict[str, Any], ...] = (),
     requires_modules: tuple[str, ...] = (),
     handler: Callable[[OperationContext], trimesh.Trimesh],
 ) -> Operation:
@@ -143,6 +144,7 @@ def make_operation(
         summary=summary,
         category=category,
         params_schema=params_schema or {},
+        parameter_presets=parameter_presets,
         requires_modules=requires_modules,
     )
 

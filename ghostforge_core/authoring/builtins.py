@@ -344,6 +344,11 @@ DEFAULT_OPERATIONS: tuple[Operation, ...] = (
             "iterations": {"type": "int", "default": 3, "min": 1, "max": 200},
             "lambda": {"type": "float", "default": 0.5, "min": 0.01, "max": 1.0},
         },
+        parameter_presets=(
+            {"label": "Subtle Cleanup", "values": {"iterations": 2, "lambda": 0.25}, "default": True},
+            {"label": "Soft Organic", "values": {"iterations": 6, "lambda": 0.45}},
+            {"label": "Heavy Relax", "values": {"iterations": 12, "lambda": 0.35}},
+        ),
         handler=_op_smooth_laplacian,
     ),
     make_operation(
@@ -363,6 +368,11 @@ DEFAULT_OPERATIONS: tuple[Operation, ...] = (
             "target_ratio": {"type": "float", "default": 0.5, "min": 0.01, "max": 1.0},
             "target_faces": {"type": "int", "default": 0, "min": 0},
         },
+        parameter_presets=(
+            {"label": "Balanced Prop", "values": {"target_ratio": 0.5, "target_faces": 0}, "default": True},
+            {"label": "Mobile LOD", "values": {"target_ratio": 0.25, "target_faces": 0}},
+            {"label": "Hero Preview", "values": {"target_ratio": 0.75, "target_faces": 0}},
+        ),
         requires_modules=("open3d",),
         handler=_op_decimate,
     ),
@@ -377,6 +387,36 @@ DEFAULT_OPERATIONS: tuple[Operation, ...] = (
             "metallic": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0},
             "roughness": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
         },
+        parameter_presets=(
+            {
+                "label": "Matte Clay",
+                "values": {
+                    "name": "matte_clay",
+                    "base_color_rgba": [0.7, 0.62, 0.52, 1.0],
+                    "metallic": 0.0,
+                    "roughness": 0.85,
+                },
+                "default": True,
+            },
+            {
+                "label": "Brushed Metal",
+                "values": {
+                    "name": "brushed_metal",
+                    "base_color_rgba": [0.65, 0.66, 0.67, 1.0],
+                    "metallic": 1.0,
+                    "roughness": 0.32,
+                },
+            },
+            {
+                "label": "Game Plastic",
+                "values": {
+                    "name": "game_plastic",
+                    "base_color_rgba": [0.15, 0.35, 0.75, 1.0],
+                    "metallic": 0.0,
+                    "roughness": 0.45,
+                },
+            },
+        ),
         handler=_op_apply_material,
     ),
 )

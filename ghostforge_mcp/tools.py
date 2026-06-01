@@ -11,6 +11,7 @@ JSON Schema export, and runtime coercion.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,14 @@ from ghostforge_core.manifest import (
 )
 from ghostforge_core.operations import mesh_info as mesh_info_op
 from ghostforge_core.operations.authoring import EvaluateGraphRequest
+from ghostforge_core.scene_links import (
+    annotate_graph_history_sequence,
+    compare_graph_history_payloads,
+    graph_history_comparison_resource_uri,
+    graph_resource_uri,
+    scene_id_for_path,
+    scene_resource_uri,
+)
 from ghostforge_core.slice import (
     AssetKind,
     AssetSpec,
@@ -185,6 +194,141 @@ def _graph_with_overrides(graph, *, input_path: str | None, output_path: str | N
     if not updates:
         return graph
     return graph.model_copy(update=updates)
+
+
+def _scene_root() -> Path:
+    return get_context().storage.root / "project" / "scenes"
+
+
+def _scene_paths() -> list[Path]:
+    root = _scene_root()
+    if not root.exists():
+        return []
+    return sorted(path for path in root.glob("*.gforge") if path.is_file())
+
+
+def _scene_index_payload() -> list[dict[str, Any]]:
+    scenes: list[dict[str, Any]] = []
+    for path in _scene_paths():
+        payload = _load_scene_payload(path)
+        scenes.append(
+            {
+                "scene_id": payload["scene_id"],
+                "name": path.stem,
+                "path": str(path),
+                "resource_uri": payload["resource_uri"],
+                "saved_at": payload.get("saved_at"),
+                "object_count": len(payload.get("objects") or []),
+            }
+        )
+    return scenes
+
+
+def _scene_payload_by_id(scene_id: str) -> dict[str, Any]:
+    safe = scene_id_for_path(scene_id)
+    for path in _scene_paths():
+        payload = _load_scene_payload(path)
+        if payload["scene_id"] == safe:
+            return payload
+    raise KeyError(f"scene {scene_id!r} not found")
+
+
+def _scene_object_payload(scene_id: str, object_id: str) -> dict[str, Any]:
+    scene = _scene_payload_by_id(scene_id)
+    for item in scene.get("objects") or []:
+        if isinstance(item, dict) and str(item.get("object_id")) == object_id:
+            return item
+    raise KeyError(f"object {object_id!r} not found in scene {scene_id!r}")
+
+
+def _scene_object_graph_history(scene_id: str, object_id: str) -> list[dict[str, Any]]:
+    item = _scene_object_payload(scene_id, object_id)
+    history = item.get("operation_graph_history")
+    if not isinstance(history, list):
+        return []
+    return [dict(row) for row in history if isinstance(row, dict)]
+
+
+def _scene_object_graph_history_item(scene_id: str, object_id: str, history_id: str) -> dict[str, Any]:
+    for row in _scene_object_graph_history(scene_id, object_id):
+        if str(row.get("history_id")) == history_id:
+            return row
+    raise KeyError(
+        f"graph history {history_id!r} not found for object {object_id!r} in scene {scene_id!r}"
+    )
+
+
+def _scene_object_graph_history_comparison(
+    scene_id: str,
+    object_id: str,
+    left_history_id: str,
+    right_history_id: str,
+) -> dict[str, Any]:
+    left = _scene_object_graph_history_item(scene_id, object_id, left_history_id)
+    right = _scene_object_graph_history_item(scene_id, object_id, right_history_id)
+    comparison = compare_graph_history_payloads(left, right)
+    return {
+        "scene_id": scene_id_for_path(scene_id),
+        "object_id": object_id,
+        "left_history_id": left_history_id,
+        "right_history_id": right_history_id,
+        "resource_uri": graph_history_comparison_resource_uri(
+            scene_id,
+            object_id,
+            left_history_id,
+            right_history_id,
+        ),
+        "comparison": comparison,
+    }
+
+
+def _load_scene_payload(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"scene document must be an object: {path}")
+    scene_id = str(payload.get("scene_id") or scene_id_for_path(path))
+    out = dict(payload)
+    out["scene_id"] = scene_id
+    out["scene_path"] = str(path)
+    out["resource_uri"] = scene_resource_uri(scene_id)
+    out["mcp_links"] = {"scene": out["resource_uri"]}
+
+    objects = out.get("objects")
+    normalized_objects: list[dict[str, Any]] = []
+    if isinstance(objects, list):
+        for item in objects:
+            if not isinstance(item, dict):
+                continue
+            normalized_objects.append(_scene_object_with_links(item, scene_id=scene_id, scene_path=path))
+    out["objects"] = normalized_objects
+    return out
+
+
+def _scene_object_with_links(item: dict[str, Any], *, scene_id: str, scene_path: Path) -> dict[str, Any]:
+    out = dict(item)
+    object_id = str(out.get("object_id") or "")
+    links = dict(out.get("mcp_links") if isinstance(out.get("mcp_links"), dict) else {})
+    links["scene"] = scene_resource_uri(scene_id)
+    graph_payload = out.get("operation_graph")
+    graph_id = ""
+    if isinstance(graph_payload, dict):
+        graph_id = str(graph_payload.get("graph_id") or "")
+    if graph_id:
+        links["graph"] = graph_resource_uri(graph_id)
+    history = out.get("operation_graph_history")
+    history_rows = [dict(row) for row in history if isinstance(row, dict)] if isinstance(history, list) else []
+    out["operation_graph_history"] = list(
+        annotate_graph_history_sequence(
+            history_rows,
+            scene_id=scene_id,
+            scene_path=scene_path,
+            object_id=object_id,
+        )
+    )
+    out["scene_id"] = scene_id
+    out["scene_path"] = str(scene_path)
+    out["mcp_links"] = links
+    return out
 
 
 def register_tools(server: FastMCP) -> None:
@@ -1682,6 +1826,96 @@ def register_tools(server: FastMCP) -> None:
     def operation_descriptors_resource() -> dict[str, Any]:
         return {"operations": _operation_descriptors_payload()}
 
+    # ------------------------------------------------------------------
+    # Workflow prompts
+    # ------------------------------------------------------------------
+
+    @server.prompt(
+        description=(
+            "Plan a manifest-backed text-to-3D prop workflow using authoring "
+            "graphs, worker capability checks, audit, and offline engine bridge packaging."
+        )
+    )
+    def generate_engine_ready_prop(
+        asset_prompt: str,
+        target_engine: str = "unity",
+        art_direction: str = "",
+        target_path: str = "",
+    ) -> str:
+        return (
+            "Generate an engine-ready Ghost Forge prop while keeping Ghost Forge the source of truth.\n\n"
+            f"Asset prompt: {asset_prompt}\n"
+            f"Target engine: {target_engine}\n"
+            f"Art direction: {art_direction or 'use project style and practical game-ready defaults'}\n"
+            f"Target engine path: {target_path or 'choose a conventional GhostForge asset path'}\n\n"
+            "Workflow:\n"
+            "1. Call `list_worker_capabilities` and `list_operations`; confirm a text-to-3D worker is runnable or honestly report stub/missing status.\n"
+            "2. Create an edit graph with `create_edit_graph`; append `generate_text_to_3d` as the first enabled node using the prompt above and a suitable `parameter_presets` entry from `list_operations`.\n"
+            "3. Append cleanup/process nodes when available, such as `worker_refine_mesh`, `worker_texture_mesh`, `recenter`, `normalize_scale`, `recompute_normals`, `bake_lightmap_uv`, or `bake_convex_collision`, using descriptor schemas and presets instead of guessed parameters.\n"
+            "4. Run `submit_evaluate_edit_graph`, then `wait_for_job`; inspect `ghostforge://graphs/{graph_id}` and `ghostforge://graphs/{graph_id}/evaluation` before continuing.\n"
+            "5. Run `audit_asset` with the target-engine preset and persist the audit into the manifest.\n"
+            "6. If audit errors remain, update the graph with corrective nodes and evaluate again; keep all changes in the graph history.\n"
+            "7. Create `ghostforge_bridge_<engine>.json` with `create_engine_export_bridge`; do not call Unity/Unreal directly unless a configured adapter is explicitly requested.\n"
+            "8. Report the graph id, asset directory, manifest path, audit status, bridge package path, and any remaining blocking diagnostics."
+        )
+
+    @server.prompt(
+        description=(
+            "Plan a Unity repair loop for an existing generated asset using scene graph-history resources, retarget diagnostics, audit, and bridge packaging."
+        )
+    )
+    def repair_generated_mesh_for_unity(
+        asset_dir: str = "",
+        graph_id: str = "",
+        scene_id: str = "",
+        object_id: str = "",
+        history_id: str = "",
+    ) -> str:
+        scene_hint = (
+            f"`ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history/{history_id}`"
+            if scene_id and object_id and history_id
+            else "`ghostforge://scenes` and the relevant scene/object graph-history resource"
+        )
+        return (
+            "Repair a generated mesh for Unity while preserving Ghost Forge provenance and graph intent.\n\n"
+            f"Asset directory: {asset_dir or 'inspect the selected graph history or manifest to resolve this'}\n"
+            f"Graph id: {graph_id or 'resolve from scene history or manifest provenance'}\n"
+            f"Scene/history resource: {scene_hint}\n\n"
+            "Workflow:\n"
+            "1. Inspect the scene/history resource and `ghostforge://graphs/{graph_id}` when available; identify the latest output mesh, manifest, audit history, and bridge history.\n"
+            "2. Run `audit_asset` with `preset='unity'` and `persist=True`; treat audit errors as blockers unless the user explicitly asks for a forced handoff.\n"
+            "3. If axis, unit, pivot, naming, collision, UV, or texture diagnostics appear, call `generate_retarget_graph` with `target_engine='unity'` and `persist_graph=True`, or append equivalent graph nodes manually using `list_operations` descriptor schemas.\n"
+            "4. Re-evaluate with `submit_evaluate_edit_graph` and `wait_for_job`; inspect the graph evaluation resource and saved scene graph-history rows after completion.\n"
+            "5. Re-run the Unity audit and compare remaining/new/resolved diagnostics before packaging.\n"
+            "6. Create the offline Unity bridge package with `create_engine_export_bridge(target_engine='unity')`; do not bypass the manifest or embed provider secrets.\n"
+            "7. Report the corrected graph id, manifest validation status, resolved/remaining diagnostics, and bridge package path."
+        )
+
+    @server.prompt(
+        description=(
+            "Plan an Unreal static-mesh package workflow using audits, retargeting, manifests, and offline bridge packages."
+        )
+    )
+    def prepare_unreal_static_mesh_package(
+        asset_dir: str,
+        target_path: str = "/Game/GhostForge",
+        package_goal: str = "static mesh import",
+    ) -> str:
+        return (
+            "Prepare an Unreal static-mesh package from a Ghost Forge asset without making the game editor authoritative.\n\n"
+            f"Asset directory: {asset_dir}\n"
+            f"Unreal target path: {target_path}\n"
+            f"Package goal: {package_goal}\n\n"
+            "Workflow:\n"
+            "1. Inspect the asset manifest and graph/scene resources linked from its provenance; confirm the primary mesh, license/provenance, engine targets, and latest audit status.\n"
+            "2. Run `audit_asset` with `preset='unreal'` and persist the result. Use `run_gltf_validator=True` when glTF validation is available.\n"
+            "3. If Unreal conventions fail, call `generate_retarget_graph(target_engine='unreal', persist_graph=True)` or append corrective graph nodes; then submit and wait for graph evaluation.\n"
+            "4. Re-run the Unreal audit and summarize resolved, remaining, and newly introduced diagnostics.\n"
+            "5. Create `ghostforge_bridge_unreal.json` with `create_engine_export_bridge(target_engine='unreal', target_path=...)`.\n"
+            "6. Prefer the offline bridge package for Unreal-MCP-Ghost import. Use `send_to_unreal` only when an adapter is configured and the user explicitly wants direct handoff.\n"
+            "7. Return the manifest path, bridge package path, recommended MCP server/tool, target path, and any remaining blockers."
+        )
+
     @server.tool(
         description=(
             "Create a new edit graph. The graph captures a non-destructive "
@@ -1752,6 +1986,89 @@ def register_tools(server: FastMCP) -> None:
             "graph_id": graph_id,
             "evaluation": None if evaluation is None else evaluation.model_dump(mode="json"),
         }
+
+    @server.resource(
+        "ghostforge://scenes",
+        name="scene_documents",
+        description="Inspectable Qt scene documents saved under the Ghost Forge project scenes directory.",
+        mime_type="application/json",
+    )
+    def scene_documents_resource() -> dict[str, Any]:
+        return {"scenes": _scene_index_payload()}
+
+    @server.resource(
+        "ghostforge://scenes/{scene_id}",
+        name="scene_document",
+        description="Inspectable Ghost Forge scene document with graph links and history rows.",
+        mime_type="application/json",
+    )
+    def scene_document_resource(scene_id: str) -> dict[str, Any]:
+        return _scene_payload_by_id(scene_id)
+
+    @server.resource(
+        "ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history",
+        name="scene_object_graph_history",
+        description="Graph result history rows for one scene object.",
+        mime_type="application/json",
+    )
+    def scene_object_graph_history_resource(scene_id: str, object_id: str) -> dict[str, Any]:
+        return {
+            "scene_id": scene_id,
+            "object_id": object_id,
+            "history": _scene_object_graph_history(scene_id, object_id),
+        }
+
+    @server.resource(
+        "ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history/{history_id}",
+        name="scene_object_graph_history_item",
+        description="One stable graph-history row for a scene object.",
+        mime_type="application/json",
+    )
+    def scene_object_graph_history_item_resource(
+        scene_id: str,
+        object_id: str,
+        history_id: str,
+    ) -> dict[str, Any]:
+        return _scene_object_graph_history_item(scene_id, object_id, history_id)
+
+    @server.resource(
+        "ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history/{left_history_id}/compare/{right_history_id}",
+        name="scene_object_graph_history_comparison",
+        description="Structured comparison between two graph-history rows for one scene object.",
+        mime_type="application/json",
+    )
+    def scene_object_graph_history_comparison_resource(
+        scene_id: str,
+        object_id: str,
+        left_history_id: str,
+        right_history_id: str,
+    ) -> dict[str, Any]:
+        return _scene_object_graph_history_comparison(
+            scene_id,
+            object_id,
+            left_history_id,
+            right_history_id,
+        )
+
+    @server.tool(
+        description=(
+            "Compare two saved graph-history rows for one Qt scene object. "
+            "Returns changed status/audit/output fields, path/resource deltas, "
+            "audit issue additions/removals, and retarget diagnostic list changes."
+        )
+    )
+    def compare_scene_graph_history(
+        scene_id: str,
+        object_id: str,
+        left_history_id: str,
+        right_history_id: str,
+    ) -> dict[str, Any]:
+        return _scene_object_graph_history_comparison(
+            scene_id,
+            object_id,
+            left_history_id,
+            right_history_id,
+        )
 
     @server.tool(description="Delete an edit graph and its evaluation report.")
     def delete_edit_graph(graph_id: str) -> dict[str, Any]:

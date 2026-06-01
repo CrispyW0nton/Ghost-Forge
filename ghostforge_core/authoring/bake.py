@@ -234,6 +234,11 @@ BAKE_OPERATIONS: tuple[Operation, ...] = (
             "resolution": {"type": "int", "default": 1024, "min": 64, "max": 8192},
             "padding": {"type": "int", "default": 4, "min": 0, "max": 64},
         },
+        parameter_presets=(
+            {"label": "Unity 1K", "values": {"engine": "unity", "resolution": 1024, "padding": 8}, "default": True},
+            {"label": "Unreal 2K", "values": {"engine": "unreal", "resolution": 2048, "padding": 16}},
+            {"label": "glTF Compact", "values": {"engine": "gltf_canonical", "resolution": 512, "padding": 4}},
+        ),
         requires_modules=("xatlas",),
         handler=_op_bake_lightmap_uv,
     ),
@@ -251,6 +256,11 @@ BAKE_OPERATIONS: tuple[Operation, ...] = (
             },
             "target_faces": {"type": "int", "default": 0, "min": 0, "max": 100000},
         },
+        parameter_presets=(
+            {"label": "Engine Convex", "values": {"output_name": "collision.glb", "output_format": "glb", "target_faces": 0}, "default": True},
+            {"label": "Low Poly Proxy", "values": {"output_name": "collision_low.glb", "output_format": "glb", "target_faces": 64}},
+            {"label": "OBJ Proxy", "values": {"output_name": "collision.obj", "output_format": "obj", "target_faces": 0}},
+        ),
         handler=_op_bake_convex_collision,
     ),
 )

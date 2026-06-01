@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ghostforge_core.authoring import EditGraph, EvaluationResult
+from ghostforge_core.scene_links import (
+    compare_graph_history_payloads,
+    graph_history_comparison_resource_uri_from_payloads,
+)
 from ghostforge_core.types import JobHandle
 from ghostforge_qt.models.operation_graph_model import (
+    GraphHistoryDeltaModel,
+    GraphHistoryDeltaRow,
     GraphResultResource,
     GraphResultResourceModel,
     OperationGraphHistoryModel,
     OperationGraphModel,
     OperationPaletteModel,
+    RetargetDiagnosticModel,
+    RetargetDiagnosticRow,
 )
 from ghostforge_qt.models.scene_model import SceneObjectRecord
 from ghostforge_qt.services.core_bridge import CoreBridge, OperationRow
@@ -28,6 +37,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
     planRetargetGraphRequested = QtCore.Signal(str)
     openGraphPathRequested = QtCore.Signal(str)
     revealGraphPathRequested = QtCore.Signal(str)
+    historyComparisonLinkCopied = QtCore.Signal(str)
+    historyComparisonPairChanged = QtCore.Signal(object)
 
     def __init__(self, bridge: CoreBridge, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -36,6 +47,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.graph_model = OperationGraphModel(parent=self)
         self.history_model = OperationGraphHistoryModel(parent=self)
         self.resource_model = GraphResultResourceModel(parent=self)
+        self.history_delta_model = GraphHistoryDeltaModel(parent=self)
+        self.retarget_model = RetargetDiagnosticModel(parent=self)
         self.active_object = QtWidgets.QLabel("-")
         self.active_object.setWordWrap(True)
         self.parameter_form = OperationParameterForm(self)
@@ -63,7 +76,14 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._retarget_after_report_payload: dict[str, object] | None = None
         self._retarget_target: str = ""
         self._asset_dir: str = ""
+        self._resource_rows: tuple[GraphResultResource, ...] = ()
+        self._last_history_comparison: dict[str, object] | None = None
+        self._last_history_comparison_uri: str = ""
+        self._history_comparison_pair_ids: tuple[str, str] | None = None
+        self._history_comparison_pair_locked = False
+        self._syncing_history_comparison_controls = False
         self._operations_by_kind: dict[str, OperationRow] = {}
+        self._graph_editing_enabled = True
         self._build()
         self.refresh()
 
@@ -90,17 +110,29 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.refresh_button = QtWidgets.QPushButton("Refresh")
         self.add_button = QtWidgets.QPushButton("Add Node")
         self.remove_button = QtWidgets.QPushButton("Remove Node")
+        self.move_up_button = QtWidgets.QPushButton("Move Up")
+        self.move_down_button = QtWidgets.QPushButton("Move Down")
+        self.toggle_node_button = QtWidgets.QPushButton("Disable Node")
+        self.move_up_button.setEnabled(False)
+        self.move_down_button.setEnabled(False)
+        self.toggle_node_button.setEnabled(False)
         self.apply_params_button = QtWidgets.QPushButton("Apply Params")
         self.evaluate_button = QtWidgets.QPushButton("Evaluate")
         self.refresh_button.clicked.connect(self.refresh)
         self.add_button.clicked.connect(self.add_selected_operation)
         self.remove_button.clicked.connect(self.remove_selected_node)
+        self.move_up_button.clicked.connect(lambda _checked=False: self.move_selected_node(-1))
+        self.move_down_button.clicked.connect(lambda _checked=False: self.move_selected_node(1))
+        self.toggle_node_button.clicked.connect(self.toggle_selected_node_enabled)
         self.apply_params_button.clicked.connect(self.apply_selected_node_params)
         self.evaluate_button.clicked.connect(self.evaluateRequested.emit)
         for button in (
             self.refresh_button,
             self.add_button,
             self.remove_button,
+            self.move_up_button,
+            self.move_down_button,
+            self.toggle_node_button,
             self.apply_params_button,
             self.evaluate_button,
         ):
@@ -111,6 +143,12 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.graph_view.setModel(self.graph_model)
         self.graph_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.graph_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.graph_view.setDragEnabled(True)
+        self.graph_view.setAcceptDrops(True)
+        self.graph_view.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+        self.graph_view.setDragDropOverwriteMode(False)
+        self.graph_view.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
+        self.graph_view.setDropIndicatorShown(True)
         self.graph_view.horizontalHeader().setStretchLastSection(True)
         self.graph_view.verticalHeader().hide()
         root.addWidget(QtWidgets.QLabel("Graph"))
@@ -132,6 +170,12 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.result_manifests = QtWidgets.QLabel("-")
         self.result_readiness = QtWidgets.QLabel("No manifest loaded.")
         self.retarget_diagnostics = QtWidgets.QLabel("No retarget plan generated.")
+        self.history_comparison = QtWidgets.QLabel("Need at least two history rows to compare.")
+        self.history_compare_left = QtWidgets.QComboBox()
+        self.history_compare_right = QtWidgets.QComboBox()
+        self.history_comparison_uri = QtWidgets.QLabel("-")
+        self.copy_history_comparison_link_button = QtWidgets.QPushButton("Copy Compare URI")
+        self.copy_history_comparison_link_button.setEnabled(False)
         for label in (
             self.result_summary,
             self.result_output,
@@ -139,14 +183,57 @@ class OperationGraphPanel(QtWidgets.QWidget):
             self.result_manifests,
             self.result_readiness,
             self.retarget_diagnostics,
+            self.history_comparison,
+            self.history_comparison_uri,
         ):
             label.setWordWrap(True)
+        self.history_comparison.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.history_comparison_uri.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         inspector_layout.addRow("Result", self.result_summary)
         inspector_layout.addRow("Output", self.result_output)
         inspector_layout.addRow("Artifacts", self.result_artifacts)
         inspector_layout.addRow("Manifests", self.result_manifests)
         inspector_layout.addRow("Readiness", self.result_readiness)
         inspector_layout.addRow("Retarget", self.retarget_diagnostics)
+        self.retarget_view = QtWidgets.QTableView()
+        self.retarget_view.setModel(self.retarget_model)
+        self.retarget_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.retarget_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.retarget_view.horizontalHeader().setStretchLastSection(True)
+        self.retarget_view.verticalHeader().hide()
+        self.retarget_view.setMinimumHeight(76)
+        inspector_layout.addRow("Retarget Diff", self.retarget_view)
+        compare_row = QtWidgets.QHBoxLayout()
+        compare_row.addWidget(QtWidgets.QLabel("From"))
+        compare_row.addWidget(self.history_compare_left, 1)
+        compare_row.addWidget(QtWidgets.QLabel("To"))
+        compare_row.addWidget(self.history_compare_right, 1)
+        inspector_layout.addRow("Compare", compare_row)
+        inspector_layout.addRow("History Delta", self.history_comparison)
+        self.history_delta_view = QtWidgets.QTableView()
+        self.history_delta_view.setModel(self.history_delta_model)
+        self.history_delta_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_delta_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.history_delta_view.horizontalHeader().setStretchLastSection(True)
+        self.history_delta_view.verticalHeader().hide()
+        self.history_delta_view.setMinimumHeight(96)
+        inspector_layout.addRow("Delta Table", self.history_delta_view)
+        comparison_link_row = QtWidgets.QHBoxLayout()
+        comparison_link_row.addWidget(self.history_comparison_uri, 1)
+        comparison_link_row.addWidget(self.copy_history_comparison_link_button)
+        inspector_layout.addRow("MCP Compare", comparison_link_row)
+        self.resource_filter = QtWidgets.QComboBox()
+        for label, kind in (
+            ("All", "all"),
+            ("Outputs", "output"),
+            ("Artifacts", "artifact"),
+            ("Manifests", "manifest"),
+            ("Asset Dirs", "asset_dir"),
+            ("Audits", "audit_history"),
+            ("Bridges", "bridge"),
+        ):
+            self.resource_filter.addItem(label, kind)
+        inspector_layout.addRow("Filter", self.resource_filter)
         self.resource_view = QtWidgets.QTableView()
         self.resource_view.setModel(self.resource_model)
         self.resource_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -228,7 +315,12 @@ class OperationGraphPanel(QtWidgets.QWidget):
 
         self.palette_view.selectionModel().selectionChanged.connect(lambda *_: self._palette_selection_changed())
         self.graph_view.selectionModel().selectionChanged.connect(lambda *_: self._graph_selection_changed())
+        self.graph_model.rowsMoved.connect(lambda *_: self._graph_rows_reordered())
         self.history_view.selectionModel().selectionChanged.connect(lambda *_: self._refresh_result_inspector())
+        self.history_compare_left.currentIndexChanged.connect(lambda *_: self._history_comparison_pair_changed())
+        self.history_compare_right.currentIndexChanged.connect(lambda *_: self._history_comparison_pair_changed())
+        self.copy_history_comparison_link_button.clicked.connect(self.copy_history_comparison_link)
+        self.resource_filter.currentIndexChanged.connect(lambda *_: self._refresh_resource_table())
         self.resource_view.selectionModel().selectionChanged.connect(lambda *_: self._refresh_resource_selection())
 
     @QtCore.Slot()
@@ -280,6 +372,48 @@ class OperationGraphPanel(QtWidgets.QWidget):
             self.graphChanged.emit(self.graph_model.graph())
             if self.graph_model.rowCount() == 0:
                 self.parameter_form.set_operation(self.selected_operation())
+            self._refresh_node_action_buttons()
+
+    @QtCore.Slot(int)
+    def move_selected_node(self, offset: int) -> None:
+        row = self._selected_graph_row()
+        if row is None:
+            self.status.setText("Select a graph node.")
+            return
+        target_row = row + offset
+        moved = self.graph_model.move_row(row, target_row)
+        if moved is None:
+            self.status.setText("Graph node cannot move further.")
+            return
+        self.graph_view.selectRow(target_row)
+        self._sync_parameter_form_to_graph()
+        self._refresh_node_action_buttons()
+        direction = "up" if offset < 0 else "down"
+        self.status.setText(f"Moved {moved.kind} {direction}.")
+
+    def _graph_rows_reordered(self) -> None:
+        self._sync_parameter_form_to_graph()
+        self._refresh_node_action_buttons()
+        self.graphChanged.emit(self.graph_model.graph())
+
+    @QtCore.Slot()
+    def toggle_selected_node_enabled(self) -> None:
+        row = self._selected_graph_row()
+        if row is None:
+            self.status.setText("Select a graph node.")
+            return
+        node = self.graph_model.node_at(row)
+        if node is None:
+            self.status.setText("Selected graph node no longer exists.")
+            return
+        updated = self.graph_model.set_node_enabled(row, not node.enabled)
+        if updated is None:
+            self.status.setText("Selected graph node no longer exists.")
+            return
+        state = "enabled" if updated.enabled else "disabled"
+        self.status.setText(f"{updated.kind} {state}.")
+        self._refresh_node_action_buttons()
+        self.graphChanged.emit(self.graph_model.graph())
 
     @QtCore.Slot()
     def apply_selected_node_params(self) -> None:
@@ -313,8 +447,11 @@ class OperationGraphPanel(QtWidgets.QWidget):
     def set_graph(self, graph: EditGraph, *, emit: bool = True) -> None:
         if graph.graph_id != self.graph_model.graph().graph_id:
             self.history_model.clear()
+            self._history_comparison_pair_ids = None
+            self._history_comparison_pair_locked = False
         self.graph_model.set_graph(graph)
         self._sync_parameter_form_to_graph()
+        self._refresh_node_action_buttons()
         self._refresh_result_inspector()
         if emit:
             self.graphChanged.emit(graph)
@@ -323,6 +460,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         graph = EditGraph(graph_id=graph_id or self.graph_model.graph().graph_id, name="Qt Operation Graph")
         self.set_graph(graph, emit=False)
         self.history_model.clear()
+        self._history_comparison_pair_ids = None
+        self._history_comparison_pair_locked = False
         self._clear_retarget_plan()
         self._refresh_result_inspector()
 
@@ -330,6 +469,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._last_result = result
         self._last_payload = dict(payload or result.model_dump(mode="json"))
         self.graph_model.set_evaluation_result(result, payload=payload)
+        self._history_comparison_pair_ids = None
+        self._history_comparison_pair_locked = False
         self.history_model.append_result(result, payload=payload)
         self.status.setText(f"Graph {result.status}: {len(result.steps)} steps.")
         self.audit_button.setEnabled(True)
@@ -349,6 +490,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         payload["manifest"] = dict(manifest_payload)
         self._last_payload = payload
         self.graph_model.set_evaluation_result(self._last_result, payload=payload)
+        self._history_comparison_pair_ids = None
+        self._history_comparison_pair_locked = False
         self.history_model.append_result(self._last_result, payload=payload, message=message or "audit refreshed")
         if self.history_model.rowCount():
             self.history_view.selectRow(0)
@@ -410,6 +553,37 @@ class OperationGraphPanel(QtWidgets.QWidget):
     def history_payloads(self) -> tuple[dict[str, object], ...]:
         return self.history_model.payloads()
 
+    def set_history_comparison_pair(self, pair: dict[str, object] | None) -> None:
+        self._history_comparison_pair_ids = _history_comparison_pair_ids_from_payload(pair)
+        self._history_comparison_pair_locked = self._history_comparison_pair_ids is not None
+        self._refresh_history_comparison()
+
+    def history_comparison_pair(self) -> dict[str, str]:
+        pair = _history_comparison_pair_for_indices(
+            self.history_model.payloads(),
+            _combo_int_data(self.history_compare_left),
+            _combo_int_data(self.history_compare_right),
+        )
+        return pair or {}
+
+    def selected_history_comparison(self) -> dict[str, object] | None:
+        if self._last_history_comparison is None:
+            return None
+        return dict(self._last_history_comparison)
+
+    def selected_history_comparison_resource_uri(self) -> str:
+        return self._last_history_comparison_uri
+
+    @QtCore.Slot()
+    def copy_history_comparison_link(self) -> None:
+        uri = self.selected_history_comparison_resource_uri()
+        if not uri:
+            self.status.setText("No graph-history comparison URI available.")
+            return
+        QtGui.QGuiApplication.clipboard().setText(uri)
+        self.status.setText("Copied graph-history comparison URI.")
+        self.historyComparisonLinkCopied.emit(uri)
+
     def set_result_manifest(
         self,
         manifest_payload: dict[str, object] | None,
@@ -434,6 +608,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._retarget_target = target_engine
         self._retarget_report_payload = dict(report_payload)
         self._retarget_after_report_payload = None
+        self._history_comparison_pair_ids = None
+        self._history_comparison_pair_locked = False
         self.history_model.append_payload(
             {
                 "graph_id": graph.graph_id,
@@ -470,6 +646,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._retarget_report_payload = dict(planned_report or {})
         self._retarget_after_report_payload = dict(report_payload)
         comparison = _retarget_comparison(self._retarget_report_payload, self._retarget_after_report_payload)
+        self._history_comparison_pair_ids = None
+        self._history_comparison_pair_locked = False
         self.history_model.append_payload(
             {
                 "graph_id": graph.graph_id,
@@ -531,6 +709,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
     @QtCore.Slot()
     def _graph_selection_changed(self) -> None:
         self._sync_parameter_form_to_graph()
+        self._refresh_node_action_buttons()
         self._refresh_result_inspector()
 
     def _sync_parameter_form_to_graph(self) -> None:
@@ -551,11 +730,19 @@ class OperationGraphPanel(QtWidgets.QWidget):
             return None
         return selection.selectedRows()[0].row()
 
-    def _selected_history_row(self):
+    def _selected_history_index(self) -> int | None:
         selection = self.history_view.selectionModel()
         if selection is not None and selection.hasSelection():
-            return self.history_model.row_at(selection.selectedRows()[0].row())
-        return self.history_model.row_at(0)
+            row = selection.selectedRows()[0].row()
+            if 0 <= row < self.history_model.rowCount():
+                return row
+        return 0 if self.history_model.rowCount() else None
+
+    def _selected_history_row(self):
+        row = self._selected_history_index()
+        if row is None:
+            return None
+        return self.history_model.row_at(row)
 
     def _operation_for_node(self, node) -> OperationRow | None:  # type: ignore[no-untyped-def]
         if node is None:
@@ -571,11 +758,22 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.cancelGraphJobRequested.emit(self._active_job_id)
 
     def _set_graph_editing_enabled(self, enabled: bool) -> None:
+        self._graph_editing_enabled = enabled
         self.add_button.setEnabled(enabled)
         self.remove_button.setEnabled(enabled)
         self.apply_params_button.setEnabled(enabled)
         self.evaluate_button.setEnabled(enabled)
         self.parameter_form.setEnabled(enabled)
+        self._refresh_node_action_buttons()
+
+    def _refresh_node_action_buttons(self) -> None:
+        row = self._selected_graph_row()
+        node = self.graph_model.node_at(row) if row is not None else None
+        count = self.graph_model.rowCount()
+        self.move_up_button.setEnabled(self._graph_editing_enabled and row is not None and row > 0)
+        self.move_down_button.setEnabled(self._graph_editing_enabled and row is not None and row < count - 1)
+        self.toggle_node_button.setEnabled(self._graph_editing_enabled and node is not None)
+        self.toggle_node_button.setText("Enable Node" if node is not None and not node.enabled else "Disable Node")
 
     def _refresh_result_inspector(self) -> None:
         history = self._selected_history_row()
@@ -588,6 +786,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
             )
             self.result_output.setText(history.output_path or "-")
 
+        self._refresh_history_comparison()
         artifact_paths, manifest_paths = self._selected_node_paths()
         if artifact_paths:
             self.result_artifacts.setText("\n".join(artifact_paths))
@@ -605,10 +804,9 @@ class OperationGraphPanel(QtWidgets.QWidget):
 
         self.result_readiness.setText(self._readiness_summary())
         self.retarget_diagnostics.setText(self._retarget_diagnostics_summary())
-        self.resource_model.set_rows(self.selected_result_resources())
-        if self.resource_model.rowCount() and not self.resource_view.selectionModel().hasSelection():
-            self.resource_view.selectRow(0)
-        self._refresh_resource_selection()
+        self._refresh_retarget_table()
+        self._resource_rows = self.selected_result_resources()
+        self._refresh_resource_table()
         can_bridge = self._manifest_engine_ready()
         self.create_unity_bridge_button.setEnabled(can_bridge)
         self.create_unreal_bridge_button.setEnabled(can_bridge)
@@ -616,9 +814,140 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.plan_unity_retarget_button.setEnabled(can_plan)
         self.plan_unreal_retarget_button.setEnabled(can_plan)
 
+    def _refresh_history_comparison(self) -> None:
+        selected_index = self._selected_history_index()
+        payloads = self.history_model.payloads()
+        self._sync_history_comparison_controls(payloads, selected_index=selected_index)
+        self._refresh_history_comparison_from_controls(payloads, selected_index=selected_index)
+
+    @QtCore.Slot()
+    def _history_comparison_pair_changed(self) -> None:
+        if self._syncing_history_comparison_controls:
+            return
+        self._refresh_history_comparison_from_controls(
+            self.history_model.payloads(),
+            selected_index=self._selected_history_index(),
+        )
+        self._history_comparison_pair_locked = self._history_comparison_pair_ids is not None
+        self.historyComparisonPairChanged.emit(self.history_comparison_pair())
+
+    def _sync_history_comparison_controls(
+        self,
+        payloads: tuple[dict[str, object], ...],
+        *,
+        selected_index: int | None,
+    ) -> None:
+        self._syncing_history_comparison_controls = True
+        try:
+            for combo in (self.history_compare_left, self.history_compare_right):
+                combo.blockSignals(True)
+                combo.clear()
+                for index, payload in enumerate(payloads):
+                    combo.addItem(_history_combo_label(index, payload), index)
+                combo.setEnabled(len(payloads) >= 2)
+                combo.blockSignals(False)
+
+            pair = (
+                _history_comparison_indices_for_ids(payloads, self._history_comparison_pair_ids)
+                if self._history_comparison_pair_locked
+                else None
+            )
+            if pair is None:
+                pair = _default_history_comparison_pair(
+                    selected_index,
+                    history_count=len(payloads),
+                )
+            left_index, right_index = pair
+            _set_combo_data(self.history_compare_left, left_index)
+            _set_combo_data(self.history_compare_right, right_index)
+        finally:
+            self._syncing_history_comparison_controls = False
+
+    def _refresh_history_comparison_from_controls(
+        self,
+        payloads: tuple[dict[str, object], ...],
+        *,
+        selected_index: int | None,
+    ) -> None:
+        left_index = _combo_int_data(self.history_compare_left)
+        right_index = _combo_int_data(self.history_compare_right)
+        comparison: dict[str, object] | None = None
+        uri = ""
+        if (
+            left_index is not None
+            and right_index is not None
+            and left_index != right_index
+            and 0 <= left_index < len(payloads)
+            and 0 <= right_index < len(payloads)
+        ):
+            comparison = compare_graph_history_payloads(payloads[left_index], payloads[right_index])
+            uri = graph_history_comparison_resource_uri_from_payloads(payloads[left_index], payloads[right_index])
+        self._history_comparison_pair_ids = _history_comparison_pair_ids_from_indices(
+            payloads,
+            left_index,
+            right_index,
+        )
+        self._last_history_comparison = comparison
+        self._last_history_comparison_uri = uri
+        self.history_delta_model.set_rows(_history_delta_rows(comparison))
+        if self.history_delta_model.rowCount():
+            self.history_delta_view.selectRow(0)
+        else:
+            self.history_delta_view.clearSelection()
+        self.history_comparison.setText(
+            _history_comparison_text(
+                comparison,
+                selected_index=selected_index,
+                history_count=len(payloads),
+                left_index=left_index,
+                right_index=right_index,
+            )
+        )
+        self.history_comparison_uri.setText(uri or "-")
+        self.copy_history_comparison_link_button.setEnabled(bool(uri))
+
+    def _refresh_retarget_table(self) -> None:
+        rows = _retarget_diagnostic_rows(
+            self._retarget_report_payload,
+            after_report_payload=self._retarget_after_report_payload,
+        )
+        self.retarget_model.set_rows(rows)
+        if rows:
+            self.retarget_view.selectRow(0)
+        else:
+            self.retarget_view.clearSelection()
+
+    def _refresh_resource_table(self) -> None:
+        current = self.selected_result_resource()
+        current_key = _resource_key(current) if current is not None else None
+        rows = self._filtered_resource_rows()
+        self.resource_model.set_rows(rows)
+        if rows:
+            row_to_select = 0
+            if current_key is not None:
+                for row, resource in enumerate(rows):
+                    if _resource_key(resource) == current_key:
+                        row_to_select = row
+                        break
+            self.resource_view.selectRow(row_to_select)
+        else:
+            self.resource_view.clearSelection()
+        self._refresh_resource_selection()
+
+    def _filtered_resource_rows(self) -> tuple[GraphResultResource, ...]:
+        kind = str(self.resource_filter.currentData() or "all")
+        if kind == "all":
+            return self._resource_rows
+        return tuple(resource for resource in self._resource_rows if resource.kind == kind)
+
     def _refresh_resource_selection(self) -> None:
         self._refresh_resource_buttons()
-        self.resource_details.setText(_resource_detail_text(self.selected_result_resource()))
+        resource = self.selected_result_resource()
+        text = _resource_detail_text(resource)
+        package_text = _bridge_package_file_detail(resource)
+        if package_text:
+            text = f"{text}\n{package_text}"
+        self.resource_details.setText(text)
 
     def _refresh_resource_buttons(self) -> None:
         paths = self.selected_result_paths()
@@ -904,11 +1233,322 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._retarget_after_report_payload = None
 
 
+def _combo_int_data(combo: QtWidgets.QComboBox) -> int | None:
+    value = combo.currentData()
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _set_combo_data(combo: QtWidgets.QComboBox, value: int | None) -> None:
+    if value is None:
+        combo.setCurrentIndex(-1)
+        return
+    index = combo.findData(value)
+    combo.setCurrentIndex(index)
+
+
+def _history_comparison_pair_ids_from_payload(pair: dict[str, object] | None) -> tuple[str, str] | None:
+    if not isinstance(pair, dict):
+        return None
+    left = str(pair.get("left_history_id") or "")
+    right = str(pair.get("right_history_id") or "")
+    if not left or not right or left == right:
+        return None
+    return left, right
+
+
+def _history_comparison_indices_for_ids(
+    payloads: tuple[dict[str, object], ...],
+    pair: tuple[str, str] | None,
+) -> tuple[int | None, int | None] | None:
+    if pair is None:
+        return None
+    left_id, right_id = pair
+    left_index = right_index = None
+    for index, payload in enumerate(payloads):
+        history_id = str(payload.get("history_id") or "")
+        if history_id == left_id:
+            left_index = index
+        if history_id == right_id:
+            right_index = index
+    if left_index is None or right_index is None or left_index == right_index:
+        return None
+    return left_index, right_index
+
+
+def _history_comparison_pair_ids_from_indices(
+    payloads: tuple[dict[str, object], ...],
+    left_index: int | None,
+    right_index: int | None,
+) -> tuple[str, str] | None:
+    pair = _history_comparison_pair_for_indices(payloads, left_index, right_index)
+    if pair is None:
+        return None
+    return pair["left_history_id"], pair["right_history_id"]
+
+
+def _history_comparison_pair_for_indices(
+    payloads: tuple[dict[str, object], ...],
+    left_index: int | None,
+    right_index: int | None,
+) -> dict[str, str] | None:
+    left_id = _history_id_at_index(payloads, left_index)
+    right_id = _history_id_at_index(payloads, right_index)
+    if not left_id or not right_id or left_id == right_id:
+        return None
+    return {"left_history_id": left_id, "right_history_id": right_id}
+
+
+def _history_id_at_index(payloads: tuple[dict[str, object], ...], index: int | None) -> str:
+    if index is None or index < 0 or index >= len(payloads):
+        return ""
+    return str(payloads[index].get("history_id") or "")
+
+
+def _default_history_comparison_pair(
+    selected_index: int | None,
+    *,
+    history_count: int,
+) -> tuple[int | None, int | None]:
+    if selected_index is None or history_count < 2:
+        return None, None
+    if selected_index + 1 < history_count:
+        return selected_index + 1, selected_index
+    return selected_index, selected_index
+
+
+def _history_combo_label(index: int, payload: dict[str, object]) -> str:
+    history_id = str(payload.get("history_id") or "")
+    graph_id = str(payload.get("graph_id") or "graph")
+    status = str(payload.get("status") or "history")
+    label = history_id or graph_id
+    if len(label) > 42:
+        label = f"{label[:18]}...{label[-18:]}"
+    return f"{index + 1}. {label} ({status})"
+
+
+def _history_delta_rows(comparison: dict[str, object] | None) -> tuple[GraphHistoryDeltaRow, ...]:
+    if not isinstance(comparison, dict) or not comparison.get("has_changes"):
+        return ()
+    rows: list[GraphHistoryDeltaRow] = []
+    _append_history_field_delta_rows(rows, "Field", comparison.get("changed_fields"))
+
+    detail_changes = comparison.get("detail_changes")
+    if isinstance(detail_changes, dict):
+        for key, label in (
+            ("artifact_paths", "Artifact Paths"),
+            ("asset_dirs", "Asset Dirs"),
+            ("manifest_paths", "Manifest Paths"),
+            ("bridge_paths", "Bridge Paths"),
+            ("retarget_resolved", "Retarget Resolved"),
+            ("retarget_remaining", "Retarget Remaining"),
+            ("retarget_new", "Retarget New"),
+        ):
+            _append_history_list_delta_rows(
+                rows,
+                _history_delta_area_for_key(key),
+                label,
+                detail_changes.get(key),
+            )
+
+    audit_changes = comparison.get("audit_changes")
+    if isinstance(audit_changes, dict):
+        _append_history_field_delta_rows(rows, "Audit", audit_changes.get("changed_fields"))
+        _append_history_list_delta_rows(
+            rows,
+            "Audit",
+            "Issues",
+            {
+                "added": audit_changes.get("issues_added"),
+                "removed": audit_changes.get("issues_removed"),
+            },
+        )
+    return tuple(rows)
+
+
+def _append_history_field_delta_rows(
+    rows: list[GraphHistoryDeltaRow],
+    area: str,
+    changes: object,
+) -> None:
+    if not isinstance(changes, dict):
+        return
+    for key, change in changes.items():
+        if not isinstance(change, dict):
+            continue
+        label = str(key).replace("_", " ").title()
+        rows.append(
+            GraphHistoryDeltaRow(
+                area,
+                label,
+                "changed",
+                f"{_comparison_value_text(change.get('left'))} -> {_comparison_value_text(change.get('right'))}",
+                "changed",
+            )
+        )
+
+
+def _append_history_list_delta_rows(
+    rows: list[GraphHistoryDeltaRow],
+    area: str,
+    label: str,
+    change: object,
+) -> None:
+    if not isinstance(change, dict):
+        return
+    added = change.get("added")
+    removed = change.get("removed")
+    if isinstance(added, list) and added:
+        rows.append(GraphHistoryDeltaRow(area, label, "added", _comparison_list_text(added), "added"))
+    if isinstance(removed, list) and removed:
+        rows.append(GraphHistoryDeltaRow(area, label, "removed", _comparison_list_text(removed), "removed"))
+
+
+def _history_delta_area_for_key(key: str) -> str:
+    if key.startswith("retarget_"):
+        return "Retarget"
+    return "Resource"
+
+
+def _history_comparison_text(
+    comparison: dict[str, object] | None,
+    *,
+    selected_index: int | None,
+    history_count: int,
+    left_index: int | None = None,
+    right_index: int | None = None,
+) -> str:
+    if history_count < 2:
+        return "Need at least two history rows to compare graph history."
+    if selected_index is None:
+        return "No graph history row selected for comparison."
+    if left_index == right_index:
+        return "Choose two different graph history rows to compare."
+    if comparison is None:
+        return "Choose two graph history rows with saved comparison payloads."
+
+    left = comparison.get("left") if isinstance(comparison.get("left"), dict) else {}
+    right = comparison.get("right") if isinstance(comparison.get("right"), dict) else {}
+    left_fallback = f"row {(left_index or 0) + 1}" if left_index is not None else "left row"
+    right_fallback = f"row {(right_index or 0) + 1}" if right_index is not None else "right row"
+    left_label = _history_summary_label(left, fallback=left_fallback)
+    right_label = _history_summary_label(right, fallback=right_fallback)
+    heading = "Previous -> Selected"
+    if not (
+        selected_index is not None
+        and left_index == selected_index + 1
+        and right_index == selected_index
+    ):
+        heading = "Comparison Pair"
+    lines = [f"{heading}: {left_label} -> {right_label}"]
+    if not comparison.get("has_changes"):
+        lines.append("No manifest, resource, audit, or retarget deltas detected.")
+        return "\n".join(lines)
+
+    _append_field_change_lines(lines, comparison.get("changed_fields"))
+    detail_changes = comparison.get("detail_changes")
+    if isinstance(detail_changes, dict):
+        for key, label in (
+            ("artifact_paths", "Artifact Paths"),
+            ("asset_dirs", "Asset Dirs"),
+            ("manifest_paths", "Manifest Paths"),
+            ("bridge_paths", "Bridge Paths"),
+            ("retarget_resolved", "Retarget Resolved"),
+            ("retarget_remaining", "Retarget Remaining"),
+            ("retarget_new", "Retarget New"),
+        ):
+            _append_list_delta_lines(lines, label, detail_changes.get(key))
+
+    audit_changes = comparison.get("audit_changes")
+    if isinstance(audit_changes, dict):
+        _append_field_change_lines(lines, audit_changes.get("changed_fields"), prefix="Audit ")
+        _append_list_delta_lines(
+            lines,
+            "Audit Issues",
+            {
+                "added": audit_changes.get("issues_added"),
+                "removed": audit_changes.get("issues_removed"),
+            },
+        )
+    return "\n".join(lines)
+
+
+def _history_summary_label(summary: object, *, fallback: str) -> str:
+    if not isinstance(summary, dict):
+        return fallback
+    history_id = str(summary.get("history_id") or "")
+    graph_id = str(summary.get("graph_id") or "")
+    status = str(summary.get("status") or "history")
+    base = history_id or graph_id or fallback
+    return f"{base} ({status})"
+
+
+def _append_field_change_lines(
+    lines: list[str],
+    changes: object,
+    *,
+    prefix: str = "",
+) -> None:
+    if not isinstance(changes, dict):
+        return
+    for key, change in changes.items():
+        if not isinstance(change, dict):
+            continue
+        label = str(key).replace("_", " ").title()
+        lines.append(
+            f"- {prefix}{label}: {_comparison_value_text(change.get('left'))} -> "
+            f"{_comparison_value_text(change.get('right'))}"
+        )
+
+
+def _append_list_delta_lines(lines: list[str], label: str, change: object) -> None:
+    if not isinstance(change, dict):
+        return
+    added = change.get("added")
+    removed = change.get("removed")
+    if isinstance(added, list) and added:
+        lines.append(f"- {label} Added: {_comparison_list_text(added)}")
+    if isinstance(removed, list) and removed:
+        lines.append(f"- {label} Removed: {_comparison_list_text(removed)}")
+
+
+def _comparison_list_text(items: list[object], *, limit: int = 4) -> str:
+    values = [_comparison_value_text(item) for item in items[:limit]]
+    if len(items) > limit:
+        values.append(f"+{len(items) - limit} more")
+    return "; ".join(values)
+
+
+def _comparison_value_text(value: object) -> str:
+    if value in (None, ""):
+        return "-"
+    if isinstance(value, dict):
+        severity = str(value.get("severity") or "")
+        rule = str(value.get("rule") or "")
+        code = str(value.get("code") or "")
+        target = str(value.get("target") or "")
+        message = str(value.get("message") or "")
+        if rule or code or message:
+            prefix = " ".join(part for part in (severity, f"{rule}:{code}" if rule else code) if part).strip()
+            if target:
+                prefix = f"{prefix} [{target}]".strip()
+            return f"{prefix}: {message}".strip(": ")
+        return json.dumps(value, sort_keys=True, default=str)
+    if isinstance(value, list):
+        return _comparison_list_text(value)
+    return str(value)
+
+
 def _first_resource_path(resources: tuple[GraphResultResource, ...], kind: str) -> str:
     for resource in resources:
         if resource.kind == kind:
             return resource.path
     return ""
+
+
+def _resource_key(resource: GraphResultResource) -> tuple[str, str, str]:
+    return (resource.kind, resource.path, resource.source)
 
 
 def _resource_detail_text(resource: GraphResultResource | None) -> str:
@@ -929,6 +1569,59 @@ def _resource_detail_text(resource: GraphResultResource | None) -> str:
         else:
             parts.append(f"{label}: {value}")
     return "\n".join(parts)
+
+
+def _bridge_package_file_detail(
+    resource: GraphResultResource | None,
+    *,
+    max_bytes: int = 256_000,
+) -> str:
+    if resource is None or resource.kind != "bridge" or not resource.path:
+        return ""
+    path = Path(resource.path)
+    lines: list[str] = []
+    try:
+        if not path.exists():
+            return ""
+        if path.stat().st_size > max_bytes:
+            return "Bridge Package JSON:\n- file_status=too_large"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return f"Bridge Package JSON:\n- file_status=unreadable: {exc}"
+    if not isinstance(payload, dict):
+        return "Bridge Package JSON:\n- file_status=not_an_object"
+
+    for key in (
+        "bridge_version",
+        "target_engine",
+        "asset_id",
+        "asset_path",
+        "manifest_path",
+        "target_path",
+        "recommended_mcp_server",
+        "recommended_tool",
+        "created_at",
+    ):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            lines.append(f"{key}={value}")
+
+    manifest = payload.get("manifest")
+    if isinstance(manifest, dict):
+        validation = manifest.get("validation") if isinstance(manifest.get("validation"), dict) else {}
+        status = validation.get("status") if isinstance(validation, dict) else None
+        if status:
+            lines.append(f"manifest_validation={status}")
+        artifacts = manifest.get("artifacts")
+        if isinstance(artifacts, list):
+            lines.append(f"manifest_artifacts={len(artifacts)}")
+
+    notes = payload.get("notes")
+    if notes:
+        lines.append(f"notes={notes}")
+    if not lines:
+        return "Bridge Package JSON:\n- file_status=empty"
+    return "Bridge Package JSON:\n" + "\n".join(f"- {line}" for line in lines)
 
 
 def _history_audit_summary(details: dict[str, object]) -> dict[str, object]:
@@ -1204,9 +1897,66 @@ def _retarget_comparison_text(
         parts.append(f"after severity: {severity}")
     if comparison["remaining"]:
         parts.append("Remaining: " + ", ".join(comparison["remaining"][:3]))
+        parts.append("Remaining families: " + _retarget_family_text(comparison["remaining"]))
     if comparison["new"]:
         parts.append("New: " + ", ".join(comparison["new"][:3]))
+        parts.append("New families: " + _retarget_family_text(comparison["new"]))
     return "\n".join(parts)
+
+
+def _retarget_diagnostic_rows(
+    report_payload: dict[str, object] | None,
+    *,
+    after_report_payload: dict[str, object] | None = None,
+) -> tuple[RetargetDiagnosticRow, ...]:
+    if not isinstance(report_payload, dict):
+        return ()
+    planned = _retarget_issues_by_key(report_payload)
+    if after_report_payload is None:
+        rows = [
+            _retarget_row_from_issue(issue, state="planned", source="planned")
+            for issue in planned.values()
+        ]
+        return tuple(sorted(rows, key=_retarget_row_sort_key))
+
+    after = _retarget_issues_by_key(after_report_payload)
+    rows: list[RetargetDiagnosticRow] = []
+    for key in sorted(planned.keys() & after.keys()):
+        rows.append(_retarget_row_from_issue(after[key], state="remaining", source="after"))
+    for key in sorted(after.keys() - planned.keys()):
+        rows.append(_retarget_row_from_issue(after[key], state="new", source="after"))
+    for key in sorted(planned.keys() - after.keys()):
+        rows.append(_retarget_row_from_issue(planned[key], state="resolved", source="planned"))
+    return tuple(sorted(rows, key=_retarget_row_sort_key))
+
+
+def _retarget_row_from_issue(
+    issue: dict[str, object],
+    *,
+    state: str,
+    source: str,
+) -> RetargetDiagnosticRow:
+    return RetargetDiagnosticRow(
+        state=state,
+        severity=str(issue.get("severity") or ""),
+        rule=str(issue.get("rule") or ""),
+        code=str(issue.get("code") or "diagnostic"),
+        target=str(issue.get("target") or issue.get("location") or ""),
+        message=str(issue.get("message") or ""),
+        suggestion=str(issue.get("suggestion") or ""),
+        source=source,
+    )
+
+
+def _retarget_row_sort_key(row: RetargetDiagnosticRow) -> tuple[int, int, str, str]:
+    state_order = {"remaining": 0, "new": 1, "planned": 2, "resolved": 3}
+    severity_order = {"error": 0, "warning": 1, "info": 2}
+    return (
+        state_order.get(row.state, 9),
+        severity_order.get(row.severity, 9),
+        row.rule,
+        row.code,
+    )
 
 
 def _retarget_comparison(
@@ -1221,6 +1971,10 @@ def _retarget_comparison(
         "remaining": sorted(planned & after),
         "new": sorted(after - planned),
     }
+
+
+def _retarget_issues_by_key(report_payload: dict[str, object]) -> dict[str, dict[str, object]]:
+    return {_issue_key(issue): issue for issue in _retarget_issues(report_payload)}
 
 
 def _retarget_issues(report_payload: dict[str, object]) -> list[dict[str, object]]:
@@ -1245,6 +1999,15 @@ def _severity_counts(issues: list[dict[str, object]]) -> dict[str, int]:
 
 def _issue_key(issue: dict[str, object]) -> str:
     return f"{issue.get('rule') or ''}:{issue.get('code') or ''}"
+
+
+def _retarget_family_text(keys: list[str]) -> str:
+    families: list[str] = []
+    for key in keys:
+        family = key.split(":", 1)[0]
+        if family and family not in families:
+            families.append(family)
+    return ", ".join(families)
 
 
 def _latest_planned_retarget_report(

@@ -157,6 +157,94 @@ preview of the external handoff contract. This makes the Qt graph inspector a
 single place to inspect generated products, validation evidence, provenance,
 and Unity/Unreal handoff metadata.
 
+Filtering the resource table by kind turns that inspector into a more practical
+pipeline browser. Outputs, side-effect artifacts, manifests, asset directories,
+audit-history rows, and bridge packages can be isolated for focused debugging,
+but the full resource set remains the source for deterministic file and package
+actions.
+
+Bridge package JSON preview closes the first engine-handoff inspection loop.
+The editor now reads selected `ghostforge_bridge_<engine>.json` packages and
+surfaces the external contract fields that matter to Unity-MCP-Ghost or
+Unreal-MCP-Ghost: target engine, asset id, paths, target path, recommended MCP
+server/tool, embedded manifest validation, artifact count, and notes.
+
+Retarget verification now behaves more like a pipeline diff report. Planned
+diagnostics are compared against the post-evaluation audit and rendered as
+remaining, new, and resolved rows. Remaining and new rows are ordered first
+because they are the next blocking facts for bridge readiness.
+
+Per-node graph bypass is now exposed in Qt. Disabling a node preserves the
+operation and its parameters as authored intent while removing it from the next
+evaluation, which matches the non-destructive pipeline rule that graph resources
+should remain inspectable and repeatable rather than deleted for quick tests.
+
+Graph node reordering is now exposed through the same pipeline contract. Moving
+a node changes the persisted operation order, preserves node ids/parameters,
+clears stale evaluation state, and leaves the graph ready for a deterministic
+re-evaluation. This moves the Qt graph closer to a real modifier stack.
+
+The graph table now supports drag/drop reordering through the same contract.
+Qt's internal move operation is constrained to Ghost Forge node rows and still
+updates the underlying graph resource, which keeps desktop actions and future
+MCP inspection on the same authored order.
+
+Path-like operation parameters are now explicit editor resources too. The Qt
+form infers file or folder pickers from the same descriptor fields consumed by
+core graph evaluation and MCP discovery, but the saved graph payload remains a
+plain string. That keeps asset inputs, reference images, output folders, and
+future bridge directories ergonomic in the desktop tool without creating a
+GUI-only contract.
+
+Operation presets are now part of the shared authoring descriptor. Presets for
+cleanup, decimation, materials, bake operations, and worker generation/refine/
+texture operations give artists and agents repeatable starting values while the
+evaluated graph still stores only concrete node parameters. This supports a
+tools-pipeline rule: defaults and profiles should be discoverable, testable,
+and shared across UI and automation.
+
+Scene graph history now behaves like an addressable pipeline resource. Saved
+`.gforge` documents include a scene id, and each operation-graph history row
+gets a deterministic history id plus MCP links to the graph, graph evaluation,
+scene, and object-specific history row. This makes persisted Qt work inspectable
+by automation without collapsing it into a mesh path alone.
+
+MCP workflow prompts now encode repeatable pipeline playbooks. The generate,
+Unity repair, and Unreal package prompts direct agents through capability
+probes, operation descriptors/presets, edit graph evaluation, saved graph
+resources, audits, and offline bridge packages. That keeps automation aligned
+with the manifest-first tools pipeline rather than encouraging one-off side
+effects.
+
+Saved graph-history rows can now be compared as pipeline evidence. The shared
+scene-link helper computes structured deltas for output/status fields, artifact
+paths, bridge packages, audit issue lists, and retarget diagnostic lists, while
+MCP exposes the same comparison as a tool and resource. This gives agents a
+repeatable way to explain what changed between two graph evaluations.
+
+The Qt result inspector now consumes that same comparison contract. Selecting a
+history row compares it with the next older row and shows output, artifact,
+bridge, audit, and retarget changes beside the other result resources. This
+keeps artist-facing debugging and MCP agent inspection aligned on one
+manifest-backed pipeline diff.
+
+The comparison surface now supports explicit pair selection and URI handoff.
+Artists can compare non-adjacent saved rows, then copy the same
+`ghostforge://.../graph-history/{left}/compare/{right}` resource URI that an
+MCP agent would read. This strengthens the pipeline rule that debug evidence is
+addressable resource state, not editor-only text.
+
+The inspector now renders those comparison results as rows too. Field changes,
+resource additions/removals, audit issue changes, and retarget list deltas are
+represented by `GraphHistoryDeltaRow` records, which makes graph-history
+comparison closer to a build/pipeline report than a paragraph of log text.
+
+The active comparison target is now part of the scene document contract. A
+saved `.gforge` object records the left/right graph-history ids for the current
+diff, and reopening the scene restores both the table evidence and the MCP
+comparison URI. This follows the pipeline principle that useful debug state
+should survive editor restarts and remain addressable for automation.
+
 ### Asset Contract
 
 Every generated or imported asset should move toward:
@@ -216,6 +304,21 @@ Do not present TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, or SyncMVD as 
 - Manifest resource drill-down details for validation issue codes and latest provenance step chains.
 - Full selected-resource validation issue and provenance step lists for manifest rows.
 - Selected-resource audit issue lists and bridge package preview fields.
+- Filtered graph result resource views for outputs, artifacts, manifests, asset directories, audit evidence, and bridge packages.
+- Selected bridge package JSON previews for external engine handoff fields.
+- Model-backed retarget diagnostic diff rows for planned, remaining, new, and resolved target-engine audit issues.
+- Per-node enable/disable controls for non-destructive graph bypass.
+- Per-node reorder controls for non-destructive modifier-stack ordering.
+- Drag/drop graph reorder routed through the shared graph model, not UI-only row shuffling.
+- Descriptor-driven path controls for graph operation inputs and output folders.
+- Shared operation parameter presets exposed through core descriptors and applied by Qt.
+- Stable scene graph-history resource IDs and MCP links for saved Qt scenes.
+- MCP prompts for engine-ready prop generation, Unity repair, and Unreal package workflows.
+- MCP graph-history comparison tool/resource for saved scene graph rows.
+- Qt graph-history comparison display backed by the shared scene-link helper and saved history resource IDs.
+- Qt pair-selected graph-history comparisons with copyable MCP comparison URIs.
+- Model-backed Qt graph-history delta rows for scan-friendly comparison reports.
+- Persisted graph-history comparison pair state in `.gforge` scene documents.
 - Audit gates block engine handoff unless forced.
 - Worker probe state is rendered accurately in the Qt model.
 - A failed model worker leaves a durable failed job with logs and no partial success badge.

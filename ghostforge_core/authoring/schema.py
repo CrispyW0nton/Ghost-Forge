@@ -136,6 +136,7 @@ class OperationDescriptor(FrozenModel):
     summary: str = ""
     category: str = "general"
     params_schema: dict[str, Any] = Field(default_factory=dict)
+    parameter_presets: tuple[dict[str, Any], ...] = ()
     requires_modules: tuple[str, ...] = ()
 
 

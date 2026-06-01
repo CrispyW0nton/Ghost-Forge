@@ -50,6 +50,7 @@ class OperationRow:
     status: str
     workers: tuple[str, ...]
     params_schema: dict[str, Any]
+    parameter_presets: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,7 @@ class CoreBridge:
                     status=self._operation_status(worker_matches, capability=capability),
                     workers=tuple(row.name for row in worker_matches),
                     params_schema=dict(descriptor.params_schema),
+                    parameter_presets=tuple(descriptor.parameter_presets),
                 )
             )
         return rows

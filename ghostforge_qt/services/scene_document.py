@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from ghostforge_core.authoring import EditGraph
+from ghostforge_core.scene_links import (
+    annotate_graph_history_sequence,
+    graph_resource_uri,
+    scene_id_for_path,
+    scene_resource_uri,
+)
 from ghostforge_core.types import utc_now
 from ghostforge_qt.models.scene_model import SceneObjectRecord, TransformState
 
@@ -21,6 +27,7 @@ class SceneDocument:
     project_root: Path
     records: list[SceneObjectRecord]
     saved_at: str
+    scene_id: str
     units: str = "meters"
     up_axis: str = "Y"
     forward_axis: str = "-Z"
@@ -46,9 +53,12 @@ class SceneDocumentService:
     ) -> Path:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        scene_id = scene_id_for_path(target)
         payload = {
             "document_version": SCENE_DOCUMENT_VERSION,
             "application": "Ghost Forge",
+            "scene_id": scene_id,
+            "resource_uri": scene_resource_uri(scene_id),
             "saved_at": utc_now().isoformat(),
             "project_root": str(Path(project_root).resolve()),
             "coordinate_policy": {
@@ -56,7 +66,7 @@ class SceneDocumentService:
                 "up_axis": up_axis,
                 "forward_axis": forward_axis,
             },
-            "objects": [_record_to_dict(record) for record in records],
+            "objects": [_record_to_dict(record, scene_id=scene_id, scene_path=target) for record in records],
         }
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -71,6 +81,7 @@ class SceneDocumentService:
             raise ValueError(f"Unsupported scene document version: {version!r}")
 
         policy = payload.get("coordinate_policy") or {}
+        scene_id = str(payload.get("scene_id") or scene_id_for_path(source))
         project_root = Path(payload.get("project_root") or source.parent.parent).resolve()
         objects = payload.get("objects")
         if not isinstance(objects, list):
@@ -79,15 +90,26 @@ class SceneDocumentService:
         return SceneDocument(
             path=source,
             project_root=project_root,
-            records=[_record_from_dict(item) for item in objects],
+            records=[_record_from_dict(item, scene_id=scene_id, scene_path=source) for item in objects],
             saved_at=str(payload.get("saved_at") or ""),
+            scene_id=scene_id,
             units=str(policy.get("units") or "meters"),
             up_axis=str(policy.get("up_axis") or "Y"),
             forward_axis=str(policy.get("forward_axis") or "-Z"),
         )
 
 
-def _record_to_dict(record: SceneObjectRecord) -> dict[str, Any]:
+def _record_to_dict(record: SceneObjectRecord, *, scene_id: str, scene_path: Path) -> dict[str, Any]:
+    graph_id = record.operation_graph.graph_id if record.operation_graph is not None else ""
+    mcp_links: dict[str, str] = {}
+    if graph_id:
+        mcp_links["graph"] = graph_resource_uri(graph_id)
+    graph_history = annotate_graph_history_sequence(
+        record.operation_graph_history,
+        scene_id=scene_id,
+        scene_path=scene_path,
+        object_id=record.object_id,
+    )
     return {
         "object_id": record.object_id,
         "name": record.name,
@@ -101,15 +123,27 @@ def _record_to_dict(record: SceneObjectRecord) -> dict[str, Any]:
         "transform": _transform_to_dict(record.transform),
         "operations": list(record.operations),
         "operation_graph": _graph_to_dict(record.operation_graph),
-        "operation_graph_history": [dict(item) for item in record.operation_graph_history],
+        "mcp_links": mcp_links,
+        "operation_graph_history": [dict(item) for item in graph_history],
+        "operation_graph_comparison_pair": _graph_history_comparison_pair_from_payload(
+            record.operation_graph_comparison_pair,
+            graph_history,
+        ),
     }
 
 
-def _record_from_dict(payload: dict[str, Any]) -> SceneObjectRecord:
+def _record_from_dict(payload: dict[str, Any], *, scene_id: str, scene_path: Path) -> SceneObjectRecord:
     if not isinstance(payload, dict):
         raise ValueError("Scene object entries must be objects")
+    object_id = str(payload["object_id"])
+    graph_history = _graph_history_from_payload(
+        payload.get("operation_graph_history"),
+        scene_id=scene_id,
+        scene_path=scene_path,
+        object_id=object_id,
+    )
     return SceneObjectRecord(
-        object_id=str(payload["object_id"]),
+        object_id=object_id,
         name=str(payload.get("name") or Path(str(payload["path"])).stem),
         path=Path(str(payload["path"])),
         asset_dir=_optional_path(payload.get("asset_dir")),
@@ -121,7 +155,11 @@ def _record_from_dict(payload: dict[str, Any]) -> SceneObjectRecord:
         transform=_transform_from_dict(payload.get("transform") or {}),
         operations=tuple(str(item) for item in payload.get("operations") or ()),
         operation_graph=_graph_from_dict(payload.get("operation_graph")),
-        operation_graph_history=_graph_history_from_payload(payload.get("operation_graph_history")),
+        operation_graph_history=graph_history,
+        operation_graph_comparison_pair=_graph_history_comparison_pair_from_payload(
+            payload.get("operation_graph_comparison_pair"),
+            graph_history,
+        ),
     )
 
 
@@ -139,14 +177,41 @@ def _graph_from_dict(payload: Any) -> EditGraph | None:
     return EditGraph.model_validate(payload)
 
 
-def _graph_history_from_payload(payload: Any) -> tuple[dict[str, object], ...]:
+def _graph_history_from_payload(
+    payload: Any,
+    *,
+    scene_id: str,
+    scene_path: Path,
+    object_id: str,
+) -> tuple[dict[str, object], ...]:
     if not isinstance(payload, list):
         return ()
     history: list[dict[str, object]] = []
     for item in payload:
         if isinstance(item, dict):
             history.append(dict(item))
-    return tuple(history)
+    return annotate_graph_history_sequence(
+        history,
+        scene_id=scene_id,
+        scene_path=scene_path,
+        object_id=object_id,
+    )
+
+
+def _graph_history_comparison_pair_from_payload(
+    payload: Any,
+    history: tuple[dict[str, object], ...],
+) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    left = str(payload.get("left_history_id") or "")
+    right = str(payload.get("right_history_id") or "")
+    if not left or not right or left == right:
+        return {}
+    valid_ids = {str(item.get("history_id") or "") for item in history if isinstance(item, dict)}
+    if left not in valid_ids or right not in valid_ids:
+        return {}
+    return {"left_history_id": left, "right_history_id": right}
 
 
 def _transform_to_dict(transform: TransformState) -> dict[str, list[float]]:

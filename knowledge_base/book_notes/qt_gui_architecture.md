@@ -181,6 +181,88 @@ package preview with target engine, recommended MCP server/tool, direct-call
 flag, and package path. The same details persist in graph history so reopen
 keeps the handoff/debug context.
 
+The resource table now has a kind filter over the same model-backed rows.
+Artists and agents can isolate outputs, artifacts, manifests, asset directories,
+audit evidence, or bridge packages without losing the full result-path context
+used by the open/reveal actions. This follows the Qt model/view rule: filter UI
+state changes table presentation, while resource identity and action routing
+remain stable.
+
+Bridge rows now read the selected bridge package JSON when it is locally
+available and render a compact preview beside the manifest history fields. The
+panel shows version, target engine, asset id, asset/manifest paths, target path,
+recommended MCP server/tool, embedded manifest validation, artifact count, and
+notes instead of forcing users to open raw JSON for basic handoff triage.
+
+Retarget verification now has a model-backed diff view. The summary label still
+states how many planned diagnostics resolved, but a table lists planned,
+remaining, newly introduced, and resolved retarget rows with severity, rule,
+code, target, message, and suggestion. Remaining and new rows sort first so the
+next correction target is immediately visible after a graph evaluation.
+
+Operation graph nodes can now be enabled or disabled from the Qt panel without
+removing them. The button updates the immutable `OperationNode.enabled` state
+through `OperationGraphModel`, clears stale evaluation badges, emits the normal
+`graphChanged` signal, and keeps the node parameters intact. This is the first
+true modifier-stack bypass control in the desktop editor.
+
+Operation graph node order can now be changed from the Qt panel as well. Move
+Up/Move Down buttons update the immutable `EditGraph.nodes` order through the
+model, clear stale evaluation state, keep the moved node selected, and emit the
+same graph-change signal as other node edits. This is the model-layer groundwork
+for later drag-and-drop stack reordering.
+
+Drag/drop graph reordering is now wired through that same model path. The graph
+table uses Qt internal move mode and `OperationGraphModel` exposes move-only
+MIME/drop behavior, so dragging a row updates the immutable graph order and
+emits `graphChanged` rather than only rearranging the visual table.
+
+Descriptor-generated path parameters now render as a reusable Qt path picker
+instead of a plain string field. The form infers file/folder intent from
+operation schema fields such as `type: path`, `format: directory`, and
+`*_dir`/`*_path` names, then still returns simple string values to the graph
+model. This follows the Qt form/dialog guidance: the widget improves input
+ergonomics, while the schema and core graph remain the source of truth.
+
+Descriptor-generated presets now sit on `OperationDescriptor` as shared
+metadata. The Qt form renders a preset combo only when descriptors provide
+presets, applies the default preset for new nodes, and writes values through
+the same widgets used for manual editing. Existing nodes keep their authored
+params when reopened, while agents can inspect the same preset metadata through
+MCP operation descriptors.
+
+Saved scene graph history now carries stable resource identity too. The Qt
+scene document service assigns a scene id, annotates each graph-history row
+with a deterministic `history_id`, and stores MCP links back to the graph,
+last evaluation, scene, and object-history row. This keeps save/open behavior
+useful for artists while giving agents a durable address for the same row.
+
+Graph-history comparison now follows the same model/view rule. The Qt result
+inspector preserves `history_id`, `resource_uri`, and `mcp_links` on restored
+history rows, then renders a previous-to-selected delta through the shared
+`compare_graph_history_payloads()` helper. The widget only presents the
+comparison text; the core helper owns the audit, artifact, bridge, and retarget
+delta contract used by MCP.
+
+Graph-history comparison is now selectable rather than only adjacent. The Qt
+inspector exposes From/To combo boxes over the saved history model, computes the
+matching MCP comparison resource URI from the selected payloads, and copies that
+URI through a button/signal. This keeps the UI affordance thin while making the
+same saved resource address usable by an artist and an agent.
+
+Graph-history deltas now have a dedicated model-backed summary table. The panel
+still keeps the prose label for quick reading, but `GraphHistoryDeltaModel`
+breaks changed fields, resource path additions/removals, audit count/issue
+changes, and retarget list deltas into rows. This follows the Qt book guidance:
+structured evidence belongs in table models so it can be tested, filtered, and
+expanded later.
+
+The active graph-history comparison pair is now scene state, not widget memory.
+`SceneObjectRecord` stores the selected left/right history ids, the scene
+document service validates them against persisted graph-history rows, and the
+main window restores them after reopening a `.gforge` file. This keeps combo-box
+state thin while preserving the artist's diagnostic context as document data.
+
 ## First Tests To Add
 
 - Main-window construction without GPU/model dependencies.
@@ -209,3 +291,16 @@ keeps the handoff/debug context.
 - Manifest graph result resource details summarize validation issue codes and latest provenance steps.
 - Manifest graph result resource details render validation issue lists and provenance step lists for selected-resource triage.
 - Audit and bridge graph result resources render persisted audit issue lists and bridge package preview fields.
+- Graph result resource filters isolate output, artifact, manifest, asset-directory, audit, and bridge rows without breaking global open/reveal path actions.
+- Bridge graph result resources preview readable `ghostforge_bridge_<engine>.json` package fields and restore that preview from saved graph history paths.
+- Retarget diagnostic diffs render planned, remaining, new, and resolved rows from persisted report payloads, with remaining/new diagnostics focused first.
+- Operation graph node enable/disable controls preserve node parameters, clear stale evaluation state, and emit updated graph intent.
+- Operation graph node reorder controls preserve node parameters, clear stale evaluation state, keep selection on the moved node, and emit updated graph intent.
+- Operation graph drag/drop reorder uses model MIME/drop behavior and emits updated graph intent.
+- Descriptor-generated operation parameter forms render file and folder path pickers while preserving plain string graph payloads.
+- Operation descriptors expose parameter presets that Qt can apply without hand-coded per-operation branches.
+- Scene save/open annotates graph-history rows with stable IDs and MCP links for agent inspection.
+- Qt graph result inspector preserves graph-history resource IDs and displays shared-core history deltas for the selected row versus the previous row.
+- Qt graph result inspector can compare explicit graph-history pairs and copy the matching MCP comparison URI without losing model-backed history state.
+- Qt graph result inspector renders graph-history comparison evidence in a model-backed delta table.
+- Scene save/open persists the active graph-history comparison pair and restores the matching From/To controls.

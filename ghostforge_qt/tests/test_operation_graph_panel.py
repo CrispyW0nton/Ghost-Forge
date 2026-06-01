@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from PySide6 import QtCore
+import json
+
+from PySide6 import QtCore, QtWidgets
 
 from ghostforge_core import CoreConfig
 from ghostforge_core.authoring import EditGraph, EvaluationResult, EvaluationStep, OperationNode
 from ghostforge_core.types import Error, JobHandle, JobProgress, JobStatus, utc_now
 from ghostforge_qt.panels.operation_graph import OperationGraphPanel
-from ghostforge_qt.panels.operation_parameters import OperationParameterForm
+from ghostforge_qt.panels.operation_parameters import OperationParameterForm, PathParameterWidget
 from ghostforge_qt.services.core_bridge import CoreBridge, OperationRow
 
 
@@ -18,6 +20,13 @@ def _select_palette_kind(panel: OperationGraphPanel, kind: str) -> None:
             QtCore.QCoreApplication.processEvents()
             return
     raise AssertionError(f"operation {kind!r} not found")
+
+
+def _set_resource_filter(panel: OperationGraphPanel, kind: str) -> None:
+    index = panel.resource_filter.findData(kind)
+    assert index >= 0
+    panel.resource_filter.setCurrentIndex(index)
+    QtCore.QCoreApplication.processEvents()
 
 
 def _job(
@@ -54,6 +63,8 @@ def test_operation_parameter_form_reads_descriptor_schema(qapp):
         workers=("stub_text_to_3d",),
         params_schema={
             "prompt": {"type": "string", "required": True},
+            "input_image_path": {"type": "path", "required": True},
+            "output_dir": {"type": "string", "format": "directory", "default": None},
             "worker": {"type": "string", "default": None},
             "seed": {"type": "int", "default": None},
             "extras": {"type": "object", "default": {}},
@@ -63,21 +74,91 @@ def test_operation_parameter_form_reads_descriptor_schema(qapp):
 
     form.set_operation(operation)
     form.set_value("prompt", "low-poly crate")
+    form.set_value("input_image_path", "C:/concepts/crate.png")
+    form.set_value("output_dir", "C:/assets/crate")
     form.set_value("worker", "stub_text_to_3d")
     form.set_value("seed", 42)
     form.set_value("extras", {"texture": True})
 
+    path_widgets = form.findChildren(PathParameterWidget)
+    assert len(path_widgets) == 2
+    assert sorted(widget.mode for widget in path_widgets) == ["directory", "file"]
     assert form.values() == {
         "prompt": "low-poly crate",
+        "input_image_path": "C:/concepts/crate.png",
+        "output_dir": "C:/assets/crate",
         "worker": "stub_text_to_3d",
         "seed": 42,
         "extras": {"texture": True},
     }
 
 
+def test_path_parameter_widget_browse_uses_file_dialog(qapp, tmp_path, monkeypatch):
+    chosen = str(tmp_path / "reference.png")
+    widget = PathParameterWidget(mode="file", file_filter="Images (*.png)")
+
+    def fake_get_open_file_name(*args, **kwargs):
+        return chosen, "Images (*.png)"
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileName", fake_get_open_file_name)
+
+    widget.browse_button.click()
+
+    assert widget.value() == chosen
+
+
+def test_operation_parameter_form_applies_descriptor_presets(qapp):
+    operation = OperationRow(
+        kind="worker_texture_mesh",
+        label="Worker Texture Mesh",
+        category="ai.process",
+        summary="",
+        operation_type="worker",
+        capability="texture_mesh",
+        status="stub",
+        workers=("stub_texture_mesh",),
+        params_schema={
+            "texture_size": {"type": "int", "default": 1024, "min": 256, "max": 4096},
+            "preserve_uvs": {"type": "bool", "default": True},
+            "extras": {"type": "object", "default": {}},
+        },
+        parameter_presets=(
+            {
+                "label": "Realtime 1K",
+                "values": {"texture_size": 1024, "preserve_uvs": True, "extras": {"target": "realtime"}},
+                "default": True,
+            },
+            {
+                "label": "Hero 4K",
+                "values": {"texture_size": 4096, "preserve_uvs": True, "extras": {"target": "hero"}},
+            },
+        ),
+    )
+    form = OperationParameterForm()
+
+    form.set_operation(operation)
+
+    assert form.preset_labels == ("Realtime 1K", "Hero 4K")
+    assert form.values() == {
+        "texture_size": 1024,
+        "preserve_uvs": True,
+        "extras": {"target": "realtime"},
+    }
+
+    form.apply_preset("Hero 4K")
+
+    assert form.values() == {
+        "texture_size": 4096,
+        "preserve_uvs": True,
+        "extras": {"target": "hero"},
+    }
+
+
 def test_operation_graph_panel_adds_and_edits_descriptor_params(qapp, tmp_path):
     bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
     panel = OperationGraphPanel(bridge)
+    changed: list[EditGraph] = []
+    panel.graphChanged.connect(changed.append)
     try:
         _select_palette_kind(panel, "recenter")
         panel.parameter_form.set_value("pivot", "bottom")
@@ -94,6 +175,19 @@ def test_operation_graph_panel_adds_and_edits_descriptor_params(qapp, tmp_path):
         panel.apply_selected_node_params()
 
         assert panel.graph().nodes[0].params == {"pivot": "origin"}
+
+        panel.toggle_node_button.click()
+        assert not panel.graph().nodes[0].enabled
+        assert panel.graph_model.data(panel.graph_model.index(0, 0)) == "no"
+        assert panel.toggle_node_button.text() == "Enable Node"
+        assert "disabled" in panel.status.text()
+
+        panel.toggle_node_button.click()
+        assert panel.graph().nodes[0].enabled
+        assert panel.graph_model.data(panel.graph_model.index(0, 0)) == "yes"
+        assert panel.toggle_node_button.text() == "Disable Node"
+        assert "enabled" in panel.status.text()
+        assert changed[-1].nodes[0].enabled
     finally:
         panel.close()
 
@@ -108,6 +202,58 @@ def test_operation_graph_panel_reports_required_param_errors(qapp, tmp_path):
 
         assert panel.graph_model.rowCount() == 0
         assert "prompt is required" in panel.status.text()
+    finally:
+        panel.close()
+
+
+def test_operation_graph_panel_reorders_selected_nodes(qapp, tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    panel = OperationGraphPanel(bridge)
+    changed: list[EditGraph] = []
+    panel.graphChanged.connect(changed.append)
+    try:
+        _select_palette_kind(panel, "recenter")
+        panel.parameter_form.set_value("pivot", "bottom")
+        panel.add_selected_operation()
+        first_id = panel.graph().nodes[0].id
+        _select_palette_kind(panel, "recompute_normals")
+        panel.add_selected_operation()
+        second_id = panel.graph().nodes[1].id
+
+        assert panel.graph_view.selectionModel().selectedRows()[0].row() == 1
+        assert panel.move_up_button.isEnabled()
+        assert not panel.move_down_button.isEnabled()
+        assert panel.graph_view.dragDropMode() == QtWidgets.QAbstractItemView.DragDropMode.InternalMove
+        assert panel.graph_view.defaultDropAction() == QtCore.Qt.DropAction.MoveAction
+
+        panel.move_up_button.click()
+
+        assert [node.id for node in panel.graph().nodes] == [second_id, first_id]
+        assert panel.graph().nodes[1].params == {"pivot": "bottom"}
+        assert panel.graph_view.selectionModel().selectedRows()[0].row() == 0
+        assert not panel.move_up_button.isEnabled()
+        assert panel.move_down_button.isEnabled()
+        assert "Moved recompute_normals up." in panel.status.text()
+        assert changed[-1].nodes[0].id == second_id
+
+        panel.move_down_button.click()
+
+        assert [node.id for node in panel.graph().nodes] == [first_id, second_id]
+        assert panel.graph_view.selectionModel().selectedRows()[0].row() == 1
+        assert panel.move_up_button.isEnabled()
+        assert not panel.move_down_button.isEnabled()
+
+        changed_count = len(changed)
+        mime = panel.graph_model.mimeData([panel.graph_model.index(1, 0)])
+        assert panel.graph_model.dropMimeData(
+            mime,
+            QtCore.Qt.DropAction.MoveAction,
+            0,
+            0,
+            QtCore.QModelIndex(),
+        )
+        assert [node.id for node in panel.graph().nodes] == [second_id, first_id]
+        assert len(changed) == changed_count + 1
     finally:
         panel.close()
 
@@ -248,6 +394,192 @@ def test_operation_graph_panel_round_trips_history_payloads(qapp, tmp_path):
         panel.close()
 
 
+def test_operation_graph_panel_compares_selected_history_payload(qapp, tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    panel = OperationGraphPanel(bridge)
+    older = {
+        "history_id": "obj_cube_graph_succeeded_1_old",
+        "resource_uri": "ghostforge://scenes/demo/objects/cube/graph-history/old",
+        "mcp_links": {"scene_object_graph_history": "ghostforge://scenes/demo/objects/cube/graph-history/old"},
+        "graph_id": "obj_cube_graph",
+        "status": "succeeded",
+        "output_path": str(tmp_path / "cube_first.glb"),
+        "duration_ms": 9.5,
+        "artifact_count": 1,
+        "audit_badge": "passed",
+        "message": "audit passed",
+        "details": {
+            "artifact_paths": [str(tmp_path / "cube_first.glb")],
+            "audit_history": {
+                "status": "passed",
+                "error_count": 0,
+                "warning_count": 0,
+                "info_count": 0,
+                "audit_issue_list": [],
+            },
+        },
+    }
+    oldest = {
+        "history_id": "obj_cube_graph_succeeded_2_oldest",
+        "resource_uri": "ghostforge://scenes/demo/objects/cube/graph-history/oldest",
+        "mcp_links": {"scene_object_graph_history": "ghostforge://scenes/demo/objects/cube/graph-history/oldest"},
+        "graph_id": "obj_cube_graph",
+        "status": "succeeded",
+        "output_path": str(tmp_path / "cube_blockout.glb"),
+        "duration_ms": 7.0,
+        "artifact_count": 1,
+        "audit_badge": "passed",
+        "message": "blockout passed",
+        "details": {
+            "artifact_paths": [str(tmp_path / "cube_blockout.glb")],
+            "audit_history": {
+                "status": "passed",
+                "error_count": 0,
+                "warning_count": 0,
+                "info_count": 0,
+                "audit_issue_list": [],
+            },
+        },
+    }
+    newer = {
+        "history_id": "obj_cube_graph_succeeded_0_new",
+        "resource_uri": "ghostforge://scenes/demo/objects/cube/graph-history/new",
+        "mcp_links": {"scene_object_graph_history": "ghostforge://scenes/demo/objects/cube/graph-history/new"},
+        "graph_id": "obj_cube_graph",
+        "status": "succeeded",
+        "output_path": str(tmp_path / "cube_latest.glb"),
+        "duration_ms": 14.25,
+        "artifact_count": 3,
+        "audit_badge": "warnings",
+        "message": "audit warnings",
+        "details": {
+            "artifact_paths": [str(tmp_path / "cube_latest.glb"), str(tmp_path / "cube_albedo.png")],
+            "bridge_paths": [str(tmp_path / "ghostforge_bridge_unity.json")],
+            "retarget_remaining": ["retarget.units:units_scale_required"],
+            "audit_history": {
+                "status": "warnings",
+                "error_count": 0,
+                "warning_count": 1,
+                "info_count": 0,
+                "audit_issue_list": [
+                    {
+                        "severity": "warning",
+                        "rule": "texture.channels",
+                        "code": "missing_metallic",
+                        "target": "material.default",
+                        "message": "Metallic texture is absent.",
+                    }
+                ],
+            },
+        },
+    }
+    try:
+        panel.set_history_payloads([newer, older, oldest])
+
+        assert panel.history_payloads()[0]["history_id"] == newer["history_id"]
+        assert panel.history_payloads()[0]["mcp_links"] == newer["mcp_links"]
+        comparison = panel.selected_history_comparison()
+        assert comparison is not None
+        assert comparison["left"]["history_id"] == older["history_id"]
+        assert comparison["right"]["history_id"] == newer["history_id"]
+        assert panel.history_comparison_pair() == {
+            "left_history_id": older["history_id"],
+            "right_history_id": newer["history_id"],
+        }
+        assert comparison["changed_fields"]["audit_badge"] == {"left": "passed", "right": "warnings"}
+        assert comparison["audit_changes"]["issues_added"]
+
+        text = panel.history_comparison.text()
+        assert "Previous -> Selected" in text
+        assert "Audit Badge: passed -> warnings" in text
+        assert "Artifact Paths Added" in text
+        assert "cube_albedo.png" in text
+        assert "Bridge Paths Added" in text
+        assert "Retarget Remaining Added" in text
+        assert "Audit Issues Added" in text
+        assert "missing_metallic" in text
+        delta_rows = panel.history_delta_model.rows()
+        assert ("Field", "Audit Badge", "changed") in {
+            (row.area, row.item, row.change) for row in delta_rows
+        }
+        assert ("Audit", "Warning Count", "changed") in {
+            (row.area, row.item, row.change) for row in delta_rows
+        }
+        assert ("Resource", "Bridge Paths", "added") in {
+            (row.area, row.item, row.change) for row in delta_rows
+        }
+        assert ("Retarget", "Retarget Remaining", "added") in {
+            (row.area, row.item, row.change) for row in delta_rows
+        }
+        assert any(row.area == "Audit" and row.item == "Issues" and "missing_metallic" in row.detail for row in delta_rows)
+        assert panel.history_delta_model.data(panel.history_delta_model.index(0, 0)) == delta_rows[0].area
+        assert panel.history_delta_view.selectionModel().selectedRows()[0].row() == 0
+        assert panel.selected_history_comparison_resource_uri() == (
+            "ghostforge://scenes/demo/objects/cube/graph-history/old/"
+            f"compare/{newer['history_id']}"
+        )
+        assert panel.history_comparison_uri.text() == panel.selected_history_comparison_resource_uri()
+        assert panel.copy_history_comparison_link_button.isEnabled()
+
+        emitted_pairs: list[dict[str, str]] = []
+        panel.historyComparisonPairChanged.connect(emitted_pairs.append)
+        panel.history_compare_left.setCurrentIndex(panel.history_compare_left.findData(2))
+        panel.history_compare_right.setCurrentIndex(panel.history_compare_right.findData(0))
+        QtCore.QCoreApplication.processEvents()
+        comparison = panel.selected_history_comparison()
+        assert comparison is not None
+        assert comparison["left"]["history_id"] == oldest["history_id"]
+        assert comparison["right"]["history_id"] == newer["history_id"]
+        assert panel.history_comparison_pair() == {
+            "left_history_id": oldest["history_id"],
+            "right_history_id": newer["history_id"],
+        }
+        assert emitted_pairs[-1] == panel.history_comparison_pair()
+        assert "Comparison Pair" in panel.history_comparison.text()
+        assert panel.history_delta_model.rowCount() > 0
+        assert panel.selected_history_comparison_resource_uri() == (
+            "ghostforge://scenes/demo/objects/cube/graph-history/oldest/"
+            f"compare/{newer['history_id']}"
+        )
+
+        restored = OperationGraphPanel(bridge)
+        try:
+            restored.set_history_payloads([newer, older, oldest])
+            restored.set_history_comparison_pair(panel.history_comparison_pair())
+            assert restored.history_compare_left.currentData() == 2
+            assert restored.history_compare_right.currentData() == 0
+            restored_comparison = restored.selected_history_comparison()
+            assert restored_comparison is not None
+            assert restored_comparison["left"]["history_id"] == oldest["history_id"]
+            assert restored_comparison["right"]["history_id"] == newer["history_id"]
+        finally:
+            restored.close()
+
+        copied: list[str] = []
+        panel.historyComparisonLinkCopied.connect(copied.append)
+        panel.copy_history_comparison_link_button.click()
+        assert copied == [panel.selected_history_comparison_resource_uri()]
+        assert QtWidgets.QApplication.clipboard().text() == panel.selected_history_comparison_resource_uri()
+
+        panel.history_view.selectRow(2)
+        QtCore.QCoreApplication.processEvents()
+        assert panel.history_comparison_pair() == {
+            "left_history_id": oldest["history_id"],
+            "right_history_id": newer["history_id"],
+        }
+        assert panel.selected_history_comparison() is not None
+
+        panel.set_history_comparison_pair({})
+        panel.history_view.selectRow(2)
+        QtCore.QCoreApplication.processEvents()
+        assert panel.selected_history_comparison() is None
+        assert "Choose two different" in panel.history_comparison.text()
+        assert panel.history_delta_model.rowCount() == 0
+        assert not panel.copy_history_comparison_link_button.isEnabled()
+    finally:
+        panel.close()
+
+
 def test_operation_graph_panel_inspects_manifest_readiness_and_bridge_signals(qapp, tmp_path):
     bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
     panel = OperationGraphPanel(bridge)
@@ -316,7 +648,28 @@ def test_operation_graph_panel_emits_result_path_actions(qapp, tmp_path):
     manifest_path = asset_dir / "asset_manifest.json"
     output_path.write_text("mesh")
     artifact_path.write_text("texture")
-    bridge_path.write_text("{}")
+    bridge_path.write_text(
+        json.dumps(
+            {
+                "bridge_version": "1.0",
+                "target_engine": "unity",
+                "recommended_mcp_server": "Unity-MCP-Ghost",
+                "recommended_tool": "import_asset",
+                "asset_id": "asset-cube",
+                "asset_path": str(output_path),
+                "manifest_path": str(manifest_path),
+                "target_path": "Assets/GhostForge/asset-cube.glb",
+                "manifest": {
+                    "validation": {"status": "passed"},
+                    "artifacts": [
+                        {"role": "mesh.primary", "path": str(output_path)},
+                        {"role": "texture.base_color", "path": str(artifact_path)},
+                    ],
+                },
+                "notes": "Offline bridge package only.",
+            }
+        )
+    )
     asset_dir.mkdir()
     manifest_path.write_text("{}")
     graph = EditGraph(
@@ -427,6 +780,30 @@ def test_operation_graph_panel_emits_result_path_actions(qapp, tmp_path):
         bridge_row = kinds.index("bridge")
         audit_row = kinds.index("audit_history")
 
+        _set_resource_filter(panel, "bridge")
+        assert panel.resource_model.rowCount() == 1
+        assert panel.resource_model.data(panel.resource_model.index(0, 0)) == "bridge"
+        assert "Recommended Mcp Server: Unity-MCP-Ghost" in panel.resource_details.text()
+        _set_resource_filter(panel, "audit_history")
+        assert panel.resource_model.rowCount() == 1
+        assert panel.resource_model.data(panel.resource_model.index(0, 0)) == "audit_history"
+        assert "missing_metallic" in panel.resource_details.text()
+        _set_resource_filter(panel, "artifact")
+        assert panel.resource_model.rowCount() == 2
+        assert {
+            panel.resource_model.data(panel.resource_model.index(row, 2))
+            for row in range(panel.resource_model.rowCount())
+        } == {str(output_path), str(artifact_path)}
+        _set_resource_filter(panel, "manifest")
+        assert panel.resource_model.rowCount() == 1
+        assert panel.resource_model.data(panel.resource_model.index(0, 2)) == str(manifest_path)
+        _set_resource_filter(panel, "asset_dir")
+        assert panel.resource_model.rowCount() == 1
+        assert panel.resource_model.data(panel.resource_model.index(0, 2)) == str(asset_dir)
+        assert panel.selected_result_paths()["output"] == str(output_path)
+        _set_resource_filter(panel, "all")
+        assert panel.resource_model.rowCount() == 7
+
         panel.open_output_button.click()
         panel.reveal_output_button.click()
         panel.open_artifact_button.click()
@@ -441,6 +818,12 @@ def test_operation_graph_panel_emits_result_path_actions(qapp, tmp_path):
         assert "Package Preview:" in panel.resource_details.text()
         assert "- recommended_tool=import_asset" in panel.resource_details.text()
         assert "- direct_engine_call=False" in panel.resource_details.text()
+        assert "Bridge Package JSON:" in panel.resource_details.text()
+        assert "- bridge_version=1.0" in panel.resource_details.text()
+        assert "- asset_id=asset-cube" in panel.resource_details.text()
+        assert "- manifest_validation=passed" in panel.resource_details.text()
+        assert "- manifest_artifacts=2" in panel.resource_details.text()
+        assert "- target_path=Assets/GhostForge/asset-cube.glb" in panel.resource_details.text()
         panel.resource_view.selectRow(audit_row)
         assert "Status: passed" in panel.resource_details.text()
         assert "Warning Count: 0" in panel.resource_details.text()
@@ -482,6 +865,9 @@ def test_operation_graph_panel_emits_result_path_actions(qapp, tmp_path):
             restored.resource_view.selectRow(restored_kinds.index("bridge"))
             assert "Recommended Mcp Server: Unity-MCP-Ghost" in restored.resource_details.text()
             assert "- recommended_tool=import_asset" in restored.resource_details.text()
+            assert "Bridge Package JSON:" in restored.resource_details.text()
+            assert "- target_engine=unity" in restored.resource_details.text()
+            assert "- manifest_artifacts=2" in restored.resource_details.text()
             restored.resource_view.selectRow(restored_kinds.index("audit_history"))
             assert "Status: passed" in restored.resource_details.text()
             assert "missing_metallic" in restored.resource_details.text()
@@ -544,6 +930,15 @@ def test_operation_graph_panel_shows_retarget_diagnostics(qapp, tmp_path):
         assert "warning=1" in panel.retarget_diagnostics.text()
         assert "axis_mismatch_assumed" in panel.retarget_diagnostics.text()
         assert "mesh_open" not in panel.retarget_diagnostics.text()
+        assert panel.retarget_model.rowCount() == 2
+        assert {
+            panel.retarget_model.data(panel.retarget_model.index(row, 3))
+            for row in range(panel.retarget_model.rowCount())
+        } == {"axis_mismatch_assumed", "units_scale_required"}
+        assert {
+            panel.retarget_model.data(panel.retarget_model.index(row, 0))
+            for row in range(panel.retarget_model.rowCount())
+        } == {"planned"}
 
         panel.set_retarget_comparison(
             target_engine="unreal",
@@ -574,6 +969,18 @@ def test_operation_graph_panel_shows_retarget_diagnostics(qapp, tmp_path):
         assert verified["retarget_new"] == ["retarget.pivot:pivot_not_at_base"]
         assert "1/2 planned diagnostics resolved" in panel.retarget_diagnostics.text()
         assert "remaining=1, new=1" in panel.retarget_diagnostics.text()
+        assert "Remaining families: retarget.units" in panel.retarget_diagnostics.text()
+        assert "New families: retarget.pivot" in panel.retarget_diagnostics.text()
+        assert panel.retarget_model.rowCount() == 3
+        assert panel.retarget_model.data(panel.retarget_model.index(0, 0)) == "remaining"
+        assert panel.retarget_model.data(panel.retarget_model.index(0, 2)) == "retarget.units"
+        assert panel.retarget_model.data(panel.retarget_model.index(0, 3)) == "units_scale_required"
+        assert panel.retarget_model.data(panel.retarget_model.index(0, 5)) == "Still needs scale"
+        assert panel.retarget_model.data(panel.retarget_model.index(1, 0)) == "new"
+        assert panel.retarget_model.data(panel.retarget_model.index(1, 2)) == "retarget.pivot"
+        assert panel.retarget_model.data(panel.retarget_model.index(2, 0)) == "resolved"
+        assert panel.retarget_model.data(panel.retarget_model.index(2, 2)) == "retarget.axis"
+        assert panel.retarget_view.selectionModel().selectedRows()[0].row() == 0
 
         restored = OperationGraphPanel(bridge)
         try:
@@ -582,6 +989,9 @@ def test_operation_graph_panel_shows_retarget_diagnostics(qapp, tmp_path):
 
             assert "1/2 planned diagnostics resolved" in restored.retarget_diagnostics.text()
             assert "remaining=1, new=1" in restored.retarget_diagnostics.text()
+            assert restored.retarget_model.rowCount() == 3
+            assert restored.retarget_model.data(restored.retarget_model.index(0, 0)) == "remaining"
+            assert restored.retarget_model.data(restored.retarget_model.index(1, 0)) == "new"
         finally:
             restored.close()
     finally:

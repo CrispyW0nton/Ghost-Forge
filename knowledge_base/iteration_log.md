@@ -947,3 +947,459 @@ Verification so far:
 - Focused audit/bridge resource drill-down tests: 33 passed.
 - Qt suite: 62 passed.
 - Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Graph Resource Filter Slice
+
+Added focused resource filtering to the Qt graph-result inspector so generated
+asset outputs, artifacts, manifests, asset directories, audit evidence, and
+bridge handoff packages can be isolated without leaving the graph panel.
+
+Book/roadmap principles applied:
+
+- Qt model/view filters should change presentation while keeping resource
+  identity and command routing stable.
+- Tool pipelines need fast ways to isolate build products, evidence, and
+  handoff packages when debugging readiness.
+- Manifest-driven actions should keep deterministic full-resource context even
+  when a user filters the visible table.
+
+Added:
+
+- A graph-result resource filter combo for all/output/artifact/manifest/
+  asset-directory/audit/bridge rows.
+- A preserved full resource row set behind the filtered table so output,
+  artifact, manifest, and asset-directory open/reveal actions still work from
+  the complete result context.
+- Focused Qt coverage for every resource filter family and the global output
+  path action after filtering.
+
+Verification so far:
+
+- Focused graph resource filter test: 1 passed.
+- Operation graph panel tests: 9 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Retarget Diagnostic Diff Slice
+
+Turned retarget verification from a summary-only label into a model-backed diff
+surface in the Qt graph-result inspector.
+
+Book/roadmap principles applied:
+
+- Retarget verification is a pipeline event and should preserve comparison
+  evidence, not just a toast or status line.
+- Qt model/view surfaces make diagnostic tables testable and restorable from
+  scene/history payloads.
+- Remaining and newly introduced target-engine diagnostics are the next
+  artist/agent action targets, so they should sort ahead of resolved evidence.
+
+Added:
+
+- `RetargetDiagnosticModel` and row data for planned, remaining, new, and
+  resolved diagnostics.
+- A retarget diff table in the graph-result inspector showing state, severity,
+  rule, code, target, message, and suggestion.
+- Retarget comparison summaries that name remaining and new diagnostic
+  families.
+- Focused tests proving planned rows, ordered remaining/new/resolved rows, and
+  restored history diff rows.
+
+Verification so far:
+
+- Focused retarget diagnostics diff test: 1 passed.
+- Focused retarget model/panel tests: 2 passed.
+- Operation graph model and panel tests: 20 passed.
+- Qt suite: 63 passed.
+- Full project verification: 594 passed, 3 skipped.
+
+## 2026-06-01 Bridge Package JSON Preview Slice
+
+Added compact bridge package JSON preview to the Qt graph-result inspector so a
+selected Unity/Unreal bridge row can show the external handoff contract without
+requiring users to open the raw JSON file.
+
+Book/roadmap principles applied:
+
+- Engine handoff should remain deterministic, offline, and inspectable.
+- Debug surfaces should expose enough package evidence for readiness triage
+  without bypassing the manifest or bridge package file as the authority.
+- Qt panels can enrich selected-resource details while keeping actions routed
+  through the existing signal/service boundary.
+
+Added:
+
+- Safe selected bridge-package JSON reading with a compact preview of bridge
+  version, target engine, asset id, asset path, manifest path, target path,
+  recommended MCP server/tool, created timestamp, embedded manifest validation,
+  artifact count, and notes.
+- Focused test coverage for live and restored bridge resource previews from a
+  realistic `ghostforge_bridge_unity.json` fixture.
+
+Verification so far:
+
+- Focused bridge package preview test: 1 passed.
+- Operation graph panel tests: 9 passed.
+- Qt suite: 62 passed.
+- Full project verification: 593 passed, 3 skipped.
+
+## 2026-06-01 Operation Graph Node Bypass Slice
+
+Added per-node enable/disable controls to the Qt operation graph so users can
+bypass a modifier/operation without deleting the authored node or losing its
+parameters.
+
+Book/roadmap principles applied:
+
+- Non-destructive graph intent should remain editable and repeatable.
+- Qt controls should mutate the model through typed methods and emit normal
+  graph-change signals instead of hiding state in the widget.
+- Changing graph intent invalidates stale evaluation badges and status.
+
+Added:
+
+- `OperationGraphModel.set_node_enabled()` for immutable node enabled-state
+  updates.
+- A Qt graph-panel `Enable Node` / `Disable Node` button that follows selected
+  node state and is disabled while graph jobs are running.
+- Focused model and panel tests proving disabled/enabled display, parameter
+  preservation, stale evaluation reset, and graph-change emission.
+
+Verification so far:
+
+- Focused node bypass tests: 2 passed.
+- Operation graph model and panel tests: 20 passed.
+- Qt suite: 63 passed.
+- Full project verification: 594 passed, 3 skipped.
+
+## 2026-06-01 Operation Graph Reorder Slice
+
+Added explicit graph node reordering controls to the Qt operation graph so the
+non-destructive stack order can change without deleting and recreating nodes.
+
+Book/roadmap principles applied:
+
+- The authoring schema defines graph evaluation as an ordered enabled-node
+  list, so order must be directly editable in the UI.
+- Reordering graph intent invalidates previous evaluation state and should use
+  the same model/signal path as parameter edits and node bypass.
+- Model-level reorder support is the groundwork for later drag-and-drop.
+
+Added:
+
+- `OperationGraphModel.move_row()` for immutable node-list reordering.
+- Move Up / Move Down buttons in the Qt operation graph panel.
+- Selection preservation on the moved node and boundary-aware button states.
+- Focused model/panel tests proving reordered ids, preserved params, stale
+  evaluation reset, selection preservation, and graph-change emission.
+
+Verification so far:
+
+- Focused graph reorder tests: 2 passed.
+- Operation graph model and panel tests: 22 passed.
+- Qt suite: 65 passed.
+- Full project verification: 596 passed, 3 skipped.
+
+## 2026-06-01 Operation Graph Drag Reorder Slice
+
+Extended graph node reordering from toolbar buttons to Qt model-backed
+drag/drop behavior.
+
+Book/roadmap principles applied:
+
+- Qt model/view drag/drop should mutate the underlying resource model, not just
+  shuffle visible rows.
+- Modifier stack order is authored graph intent and must remain shared between
+  desktop UI, saved scenes, MCP inspection, and graph evaluation.
+- Drag/drop is a UI gesture; `OperationGraphModel` remains the owner of graph
+  order changes.
+
+Added:
+
+- Move-only MIME/drop support for graph node rows in `OperationGraphModel`.
+- Qt internal move configuration for the operation graph table.
+- `rowsMoved` handling in the panel that emits `graphChanged` for drag-driven
+  reorders.
+- Focused tests proving model drop behavior, panel drag/drop configuration,
+  and graph-change emission from a simulated drop.
+
+Verification so far:
+
+- Focused drag/drop reorder tests: 2 passed.
+- Operation graph model and panel tests: 22 passed.
+- Qt suite: 65 passed.
+- Full project verification: 596 passed, 3 skipped.
+
+## 2026-06-01 Operation Parameter Path Picker Slice
+
+Upgraded descriptor-generated graph parameter editing so path-like operation
+fields render as file/folder picker controls instead of plain string fields.
+
+Book/roadmap principles applied:
+
+- Qt forms should stay schema-driven and avoid per-operation branches.
+- Tool inputs are resource references, so file and folder paths should be
+  ergonomic in the editor while remaining serializable graph payloads.
+- The widget can improve artist workflow without changing the core/MCP
+  operation contract.
+
+Added:
+
+- `PathParameterWidget`, a compact line edit plus browse button for file and
+  folder parameter selection.
+- Descriptor inference for `type: path`, `format: directory`, and
+  path-like parameter names.
+- Focused tests proving generated file/folder picker modes and dialog-driven
+  browse behavior without launching a modal dialog.
+
+Verification so far:
+
+- Focused path parameter tests: 2 passed.
+- Operation graph panel tests: 11 passed.
+- Qt suite: 66 passed.
+- Full project verification: 597 passed, 3 skipped.
+
+## 2026-06-01 Operation Parameter Preset Slice
+
+Promoted graph operation presets into the shared authoring descriptor contract
+and taught the Qt parameter form to apply them without per-operation branches.
+
+Book/roadmap principles applied:
+
+- Qt controls should be generated from descriptor metadata rather than custom
+  operation widgets.
+- MCP operation discovery should expose the same parameter profiles as the
+  desktop editor so agents can compose graph nodes with known starting values.
+- A preset is authoring intent ergonomics; evaluated graphs still store
+  concrete node parameters.
+
+Added:
+
+- `OperationDescriptor.parameter_presets` and `OperationRow.parameter_presets`.
+- Default and selectable presets for smoothing, decimation, materials, lightmap
+  UV bake, convex collision bake, text/image source generation, worker refine,
+  and worker texture operations.
+- A Qt preset combo that applies descriptor presets through existing generated
+  widgets and preserves normal graph parameter serialization.
+- Focused Qt, bridge, and MCP tests proving preset application and descriptor
+  exposure.
+
+Verification so far:
+
+- Focused descriptor preset tests: 3 passed.
+- Focused core/Qt/MCP descriptor preset tests: 43 passed, 1 skipped.
+- Qt suite: 67 passed.
+- Full project verification: 598 passed, 3 skipped.
+
+## 2026-06-01 Scene Graph History Resource Link Slice
+
+Made saved Qt scene graph history addressable by MCP resources.
+
+Book/roadmap principles applied:
+
+- Saved scenes should preserve graph intent and history as resources, not
+  transient UI labels.
+- MCP resources should expose inspectable state that agents can resume from.
+- Resource identity must stay deterministic across save/open so automation can
+  refer to the same graph-history row later.
+
+Added:
+
+- `ghostforge_core.scene_links` helpers for scene ids, graph URIs, evaluation
+  URIs, deterministic graph-history ids, and scene object history resource URIs.
+- Qt scene document save/open annotation for graph-history rows with
+  `history_id`, `resource_uri`, and `mcp_links`.
+- MCP resources for `ghostforge://scenes`, scene documents, scene object graph
+  history lists, and individual history rows.
+- Focused Qt and MCP tests proving scene save/open history links and MCP
+  scene/history resource inspection.
+
+Verification so far:
+
+- Focused scene graph-history resource tests: 4 passed.
+- Focused scene/MCP persistence tests: 47 passed.
+- Qt suite: 67 passed.
+- Full project verification: 599 passed, 3 skipped.
+
+## 2026-06-01 MCP Graph Workflow Prompt Slice
+
+Added first-class MCP prompts for repeated graph and engine-handoff workflows.
+
+Book/roadmap principles applied:
+
+- MCP prompts should encode repeatable workflows while tools perform actions
+  and resources expose inspectable state.
+- Agent workflows must route through worker probes, graph resources, manifests,
+  audits, and bridge packages rather than direct side channels.
+- Prompt guidance should preserve Ghost Forge as the source of truth for asset
+  generation, repair, validation, provenance, and engine handoff.
+
+Added:
+
+- `generate_engine_ready_prop` prompt for text-to-3D graph generation,
+  evaluation, audit, repair, and bridge packaging.
+- `repair_generated_mesh_for_unity` prompt for scene/history-driven Unity
+  repair loops using audits and retarget graphs.
+- `prepare_unreal_static_mesh_package` prompt for Unreal audit, retarget, and
+  `ghostforge_bridge_unreal.json` packaging.
+- Focused MCP test coverage for prompt registration and rendered workflow
+  content.
+
+Verification so far:
+
+- Focused MCP workflow prompt test: 1 passed.
+- MCP authoring surface tests: 13 passed.
+- Qt suite: 67 passed.
+- Full project verification: 600 passed, 3 skipped.
+
+## 2026-06-01 Scene Graph History Comparison Slice
+
+Added structured comparison for saved scene object graph-history rows.
+
+Book/roadmap principles applied:
+
+- Saved graph results are pipeline evidence and should be comparable without
+  hand-parsing scene JSON.
+- MCP actions/resources should preserve deterministic resource identity and
+  return structured deltas agents can reason over.
+- Comparison should focus on manifest and handoff-relevant fields: output,
+  artifacts, bridge packages, audit status/issues, and retarget diagnostics.
+
+Added:
+
+- `compare_graph_history_payloads()` in `ghostforge_core.scene_links`.
+- `compare_scene_graph_history` MCP tool.
+- `ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history/{left_history_id}/compare/{right_history_id}` resource.
+- Focused MCP tests proving comparison registration and output/audit/resource
+  deltas across two saved graph-history rows.
+
+Verification so far:
+
+- Focused MCP graph-history comparison tests: 2 passed.
+- MCP authoring surface tests: 13 passed.
+- Qt suite: 67 passed.
+- Full project verification: 600 passed, 3 skipped.
+
+## 2026-06-01 Qt Graph History Comparison Slice
+
+Added graph-history delta comparison to the Qt result inspector so artists can
+see the same output, artifact, bridge, audit, and retarget changes that MCP
+agents receive from scene graph-history comparison resources.
+
+Book/roadmap principles applied:
+
+- Qt model/view panels should display shared core state rather than inventing
+  local-only comparison logic.
+- Saved graph-history rows are pipeline evidence and must preserve stable
+  `history_id`, `resource_uri`, and `mcp_links` fields across UI round-trips.
+- Artist-facing debugging and MCP automation should converge on the same
+  manifest-backed diff contract.
+
+Added:
+
+- `GraphEvaluationHistoryRow` preservation for saved graph-history resource
+  identity fields.
+- A selectable `History Delta` result-inspector label that compares the
+  selected row against the previous row via `compare_graph_history_payloads()`.
+- Focused Qt test coverage for resource-id preservation, output/audit/resource
+  deltas, retarget list deltas, and the oldest-row no-comparison state.
+
+Verification so far:
+
+- Py compile for edited Qt graph files: passed.
+- Focused Qt graph-history comparison test: 1 passed.
+- Operation graph panel tests: 13 passed.
+- Qt suite: 68 passed.
+- Full project verification: 601 passed, 3 skipped.
+
+## 2026-06-01 Qt Graph History Pair Link Slice
+
+Extended the Qt graph-history comparison surface from adjacent selected-row
+diffs to explicit From/To pair selection with a copyable MCP comparison URI.
+
+Book/roadmap principles applied:
+
+- Qt widgets should present model-backed state while shared helpers preserve
+  resource identity and URI rules.
+- Saved graph-history rows are pipeline resources, so non-adjacent comparisons
+  should address the same MCP resource an agent can read later.
+- Human debugging and agent automation should share a stable handoff link
+  rather than relying on screenshots or copied prose.
+
+Added:
+
+- `graph_history_comparison_resource_uri_from_payloads()` in
+  `ghostforge_core.scene_links`.
+- Qt From/To combo boxes for graph-history comparison pairs.
+- A selectable MCP comparison URI label plus `Copy Compare URI` button/signal.
+- Focused Qt coverage for non-adjacent comparison, URI derivation, clipboard
+  copy, and disabled copy state when only one row is selected as both sides.
+
+Verification so far:
+
+- Py compile for edited scene-link and Qt graph files: passed.
+- Focused Qt graph-history pair/link test: 1 passed.
+- Operation graph panel tests: 13 passed.
+- Qt suite: 68 passed.
+- Full project verification: 601 passed, 3 skipped.
+
+## 2026-06-01 Qt Graph History Delta Table Slice
+
+Added a model-backed delta table to the Qt graph-history comparison surface so
+artists can scan comparison evidence without reading the full prose summary.
+
+Book/roadmap principles applied:
+
+- Qt model/view is the right shape for data-heavy diagnostic surfaces.
+- Pipeline/debug evidence should be structured rows that can later be filtered,
+  sorted, and addressed by tests.
+- The desktop editor should render the same field, resource, audit, and
+  retarget deltas that MCP exposes, keeping human and agent inspection aligned.
+
+Added:
+
+- `GraphHistoryDeltaRow` and `GraphHistoryDeltaModel`.
+- Delta-row conversion for changed top-level fields, resource path changes,
+  audit count/issue changes, and retarget diagnostic list changes.
+- A `Delta Table` in the graph result inspector that updates with the selected
+  comparison pair.
+- Focused model and panel tests for comparison row rendering.
+
+Verification so far:
+
+- Py compile for edited Qt graph/model files: passed.
+- Focused delta model/panel tests: 2 passed.
+- Operation graph panel tests: 13 passed.
+- Qt suite: 69 passed.
+- Full project verification: 602 passed, 3 skipped.
+
+## 2026-06-01 Qt Graph History Comparison Persistence Slice
+
+Promoted the active Qt graph-history comparison pair from transient widget
+state into persisted `.gforge` scene state.
+
+Book/roadmap principles applied:
+
+- Qt model/view state should be restored from the document, not reconstructed
+  from incidental combo-box defaults.
+- Pipeline/debug evidence should survive editor restarts if it can influence
+  artist or MCP agent decisions.
+- MCP comparison URIs are more useful when the desktop scene reopens on the
+  same left/right evidence target that produced the URI.
+
+Added:
+
+- `SceneObjectRecord.operation_graph_comparison_pair`.
+- `.gforge` serialization/deserialization for validated left/right
+  graph-history ids.
+- Qt graph-panel APIs and signals for reading/restoring the selected comparison
+  pair while keeping pair selection model-backed.
+- Main-window save/open synchronization so reopened scenes restore the From/To
+  comparison controls, delta table, and copyable MCP comparison URI.
+- Focused tests for scene document round-trip, panel pair restore, and
+  main-window save/reopen behavior.
+
+Verification so far:
+
+- Focused comparison persistence tests: 3 passed.
+- Full project verification: 602 passed, 3 skipped.

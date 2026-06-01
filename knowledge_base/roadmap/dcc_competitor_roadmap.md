@@ -86,6 +86,21 @@ Recent progress as of 2026-06-01:
 - Qt manifest resource drill-down now includes validation issue code summaries and latest provenance step chains.
 - Qt manifest resource drill-down now renders validation issue lists and provenance step lists for selected-resource triage.
 - Qt audit and bridge resource drill-down now renders persisted audit issue lines and compact bridge package preview fields.
+- Qt graph result resources can now be filtered by output, artifact, manifest, asset directory, audit evidence, or bridge package while preserving full open/reveal action routing.
+- Qt bridge package rows now preview readable `ghostforge_bridge_<engine>.json` fields, including target engine, asset id, asset/manifest paths, target path, recommended MCP server/tool, embedded manifest validation, artifact count, and notes.
+- Qt retarget verification now has a model-backed diagnostic diff table that lists planned, remaining, new, and resolved target-engine audit issues, with remaining/new rows focused first.
+- Qt operation graph nodes can now be enabled or disabled from the panel, preserving parameters while bypassing the node in future graph evaluations.
+- Qt operation graph nodes can now be moved up/down in the stack while preserving ids, parameters, and graph-change signaling.
+- Qt operation graph rows now support drag/drop stack reordering through model MIME/drop behavior, not UI-only row shuffling.
+- Qt descriptor-generated operation parameters now render file/folder path pickers for path-like schema fields while preserving plain string graph payloads.
+- Core operation descriptors now expose shared parameter presets for smoothing, decimation, material, bake, and worker graph operations; Qt applies them and MCP lists the same presets for agents.
+- Saved Qt scene graph-history rows now get deterministic history IDs and MCP links, and MCP exposes `ghostforge://scenes` resources for scene/object graph-history inspection.
+- MCP now exposes workflow prompts for engine-ready prop generation, Unity generated-mesh repair, and Unreal static-mesh bridge packaging.
+- MCP now exposes `compare_scene_graph_history` plus a matching scene graph-history comparison resource for output, artifact, audit, bridge, and retarget deltas.
+- Qt graph result inspector now uses the same shared comparison helper to show previous-to-selected graph-history deltas, preserving saved `history_id`, `resource_uri`, and `mcp_links` fields for artist/agent parity.
+- Qt graph result inspector now supports explicit graph-history pair selection, including non-adjacent rows, and can copy the matching MCP comparison resource URI for agent handoff.
+- Qt graph result inspector now includes a model-backed graph-history delta table for field, resource, audit, and retarget changes so comparison evidence can be scanned without reading the full text label.
+- `.gforge` scene documents now persist the active graph-history comparison pair, so reopening a scene restores the artist's selected From/To diff target and matching MCP comparison URI.
 
 ## Competitor Capability Map
 
@@ -298,7 +313,5 @@ Acceptance gate:
 
 Deepen graph result inspection and engine-readiness handling:
 
-- Add bridge package JSON file preview and resource-table filters for artifact, manifest, audit, and bridge rows.
-- Promote retarget comparison into a richer diff view with direct focus on remaining/new diagnostic families.
-- Expand descriptor-generated parameter editors with path pickers, presets, drag reorder, and per-node enable/disable controls.
-- Keep graph ids and graph-history payloads stable across Qt save/open and MCP inspection.
+- Add prompt-driven MCP tests that execute a small end-to-end generated asset workflow once hosted/stub workers are configured for CI-safe sample assets.
+- Add graph-history comparison actions that can promote selected deltas into follow-up graph repair nodes or audit tasks.

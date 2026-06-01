@@ -215,6 +215,21 @@ WORKER_OPERATIONS: tuple[Operation, ...] = (
             "output_format": {"type": "string", "default": "glb"},
             "extras": {"type": "object", "default": {}},
         },
+        parameter_presets=(
+            {
+                "label": "Game Prop",
+                "values": {"output_format": "glb", "extras": {"style": "game-ready prop"}},
+                "default": True,
+            },
+            {
+                "label": "Hero Asset",
+                "values": {"output_format": "glb", "extras": {"quality": "high", "detail": "hero"}},
+            },
+            {
+                "label": "Prototype",
+                "values": {"output_format": "glb", "extras": {"quality": "draft"}},
+            },
+        ),
         handler=_op_generate_text_to_3d,
     ),
     make_operation(
@@ -230,6 +245,17 @@ WORKER_OPERATIONS: tuple[Operation, ...] = (
             "output_format": {"type": "string", "default": "glb"},
             "extras": {"type": "object", "default": {}},
         },
+        parameter_presets=(
+            {
+                "label": "Reference Match",
+                "values": {"output_format": "glb", "extras": {"mode": "reference_match"}},
+                "default": True,
+            },
+            {
+                "label": "Clean Game Mesh",
+                "values": {"output_format": "glb", "extras": {"mode": "game_asset", "clean_topology": True}},
+            },
+        ),
         handler=_op_generate_image_to_3d,
     ),
     make_operation(
@@ -245,6 +271,21 @@ WORKER_OPERATIONS: tuple[Operation, ...] = (
             "output_format": {"type": "string", "default": "glb"},
             "extras": {"type": "object", "default": {}},
         },
+        parameter_presets=(
+            {
+                "label": "Realtime Retopo",
+                "values": {"target_face_count": 8000, "preserve_uvs": True, "output_format": "glb"},
+                "default": True,
+            },
+            {
+                "label": "Mobile Retopo",
+                "values": {"target_face_count": 3000, "preserve_uvs": True, "output_format": "glb"},
+            },
+            {
+                "label": "Hero Cleanup",
+                "values": {"target_face_count": 25000, "preserve_uvs": True, "output_format": "glb"},
+            },
+        ),
         handler=_op_worker_refine_mesh,
     ),
     make_operation(
@@ -261,6 +302,21 @@ WORKER_OPERATIONS: tuple[Operation, ...] = (
             "output_format": {"type": "string", "default": "glb"},
             "extras": {"type": "object", "default": {}},
         },
+        parameter_presets=(
+            {
+                "label": "Realtime 1K",
+                "values": {"texture_size": 1024, "output_format": "glb", "extras": {"target": "realtime"}},
+                "default": True,
+            },
+            {
+                "label": "Hero 4K",
+                "values": {"texture_size": 4096, "output_format": "glb", "extras": {"target": "hero"}},
+            },
+            {
+                "label": "Mobile 512",
+                "values": {"texture_size": 512, "output_format": "glb", "extras": {"target": "mobile"}},
+            },
+        ),
         handler=_op_worker_texture_mesh,
     ),
 )

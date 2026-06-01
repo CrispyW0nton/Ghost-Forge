@@ -83,6 +83,171 @@ class GraphResultResourceModel(QtCore.QAbstractTableModel):
         return list(self._rows)
 
 
+@dataclass(frozen=True)
+class GraphHistoryDeltaRow:
+    area: str
+    item: str
+    change: str
+    detail: str = ""
+    severity: str = ""
+
+
+class GraphHistoryDeltaModel(QtCore.QAbstractTableModel):
+    COLUMNS = ("Area", "Item", "Change", "Detail")
+    DeltaRole = QtCore.Qt.ItemDataRole.UserRole + 1
+    AreaRole = QtCore.Qt.ItemDataRole.UserRole + 2
+    SeverityRole = QtCore.Qt.ItemDataRole.UserRole + 3
+
+    def __init__(
+        self,
+        rows: list[GraphHistoryDeltaRow] | None = None,
+        parent: QtCore.QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rows = rows or []
+
+    def rowCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self.COLUMNS)
+
+    def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        if role == self.DeltaRole:
+            return row
+        if role == self.AreaRole:
+            return row.area
+        if role == self.SeverityRole:
+            return row.severity
+        if role == QtCore.Qt.ItemDataRole.ForegroundRole and index.column() in {0, 2}:
+            return QtGui.QBrush(_delta_color(row.severity))
+        if role == QtCore.Qt.ItemDataRole.ToolTipRole:
+            return row.detail
+        if role != QtCore.Qt.ItemDataRole.DisplayRole:
+            return None
+        values = (
+            row.area,
+            row.item,
+            row.change,
+            row.detail or "-",
+        )
+        return values[index.column()]
+
+    def headerData(
+        self,
+        section: int,
+        orientation: QtCore.Qt.Orientation,
+        role: int = QtCore.Qt.ItemDataRole.DisplayRole,
+    ):
+        if role == QtCore.Qt.ItemDataRole.DisplayRole and orientation == QtCore.Qt.Orientation.Horizontal:
+            return self.COLUMNS[section]
+        return None
+
+    def set_rows(self, rows: list[GraphHistoryDeltaRow] | tuple[GraphHistoryDeltaRow, ...]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def row_at(self, row: int) -> GraphHistoryDeltaRow | None:
+        if row < 0 or row >= len(self._rows):
+            return None
+        return self._rows[row]
+
+    def rows(self) -> list[GraphHistoryDeltaRow]:
+        return list(self._rows)
+
+
+@dataclass(frozen=True)
+class RetargetDiagnosticRow:
+    state: str
+    severity: str
+    rule: str
+    code: str
+    target: str = ""
+    message: str = ""
+    suggestion: str = ""
+    source: str = ""
+
+    @property
+    def key(self) -> str:
+        return f"{self.rule}:{self.code}"
+
+
+class RetargetDiagnosticModel(QtCore.QAbstractTableModel):
+    COLUMNS = ("State", "Severity", "Rule", "Code", "Target", "Message", "Suggestion")
+    DiagnosticRole = QtCore.Qt.ItemDataRole.UserRole + 1
+    StateRole = QtCore.Qt.ItemDataRole.UserRole + 2
+    KeyRole = QtCore.Qt.ItemDataRole.UserRole + 3
+
+    def __init__(
+        self,
+        rows: list[RetargetDiagnosticRow] | None = None,
+        parent: QtCore.QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rows = rows or []
+
+    def rowCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self.COLUMNS)
+
+    def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        if role == self.DiagnosticRole:
+            return row
+        if role == self.StateRole:
+            return row.state
+        if role == self.KeyRole:
+            return row.key
+        if role == QtCore.Qt.ItemDataRole.ForegroundRole and index.column() in {0, 1}:
+            return QtGui.QBrush(_diagnostic_color(row.state, row.severity))
+        if role == QtCore.Qt.ItemDataRole.ToolTipRole:
+            parts = [row.key, row.message, row.suggestion, f"source: {row.source}" if row.source else ""]
+            return "\n".join(part for part in parts if part)
+        if role != QtCore.Qt.ItemDataRole.DisplayRole:
+            return None
+        values = (
+            row.state,
+            row.severity or "-",
+            row.rule or "-",
+            row.code or "-",
+            row.target or "-",
+            row.message or "-",
+            row.suggestion or "-",
+        )
+        return values[index.column()]
+
+    def headerData(
+        self,
+        section: int,
+        orientation: QtCore.Qt.Orientation,
+        role: int = QtCore.Qt.ItemDataRole.DisplayRole,
+    ):
+        if role == QtCore.Qt.ItemDataRole.DisplayRole and orientation == QtCore.Qt.Orientation.Horizontal:
+            return self.COLUMNS[section]
+        return None
+
+    def set_rows(self, rows: list[RetargetDiagnosticRow] | tuple[RetargetDiagnosticRow, ...]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def row_at(self, row: int) -> RetargetDiagnosticRow | None:
+        if row < 0 or row >= len(self._rows):
+            return None
+        return self._rows[row]
+
+    def rows(self) -> list[RetargetDiagnosticRow]:
+        return list(self._rows)
+
+
 class OperationPaletteModel(QtCore.QAbstractTableModel):
     COLUMNS = ("Kind", "Type", "Status", "Workers", "Summary")
     OperationRole = QtCore.Qt.ItemDataRole.UserRole + 1
@@ -148,6 +313,7 @@ class OperationPaletteModel(QtCore.QAbstractTableModel):
 
 class OperationGraphModel(QtCore.QAbstractTableModel):
     COLUMNS = ("Enabled", "Kind", "Label", "Status", "Artifacts", "Manifest/Audit", "Params")
+    NODE_ROW_MIME = "application/x-ghostforge-operation-graph-row"
     NodeRole = QtCore.Qt.ItemDataRole.UserRole + 1
     NodeIdRole = QtCore.Qt.ItemDataRole.UserRole + 2
     StatusRole = QtCore.Qt.ItemDataRole.UserRole + 3
@@ -214,6 +380,64 @@ class OperationGraphModel(QtCore.QAbstractTableModel):
             return self.COLUMNS[section]
         return None
 
+    def flags(self, index: QtCore.QModelIndex) -> QtCore.Qt.ItemFlag:
+        flags = super().flags(index)
+        if index.isValid():
+            return flags | QtCore.Qt.ItemFlag.ItemIsDragEnabled | QtCore.Qt.ItemFlag.ItemIsDropEnabled
+        return flags | QtCore.Qt.ItemFlag.ItemIsDropEnabled
+
+    def supportedDropActions(self) -> QtCore.Qt.DropAction:
+        return QtCore.Qt.DropAction.MoveAction
+
+    def supportedDragActions(self) -> QtCore.Qt.DropAction:
+        return QtCore.Qt.DropAction.MoveAction
+
+    def mimeTypes(self) -> list[str]:
+        return [self.NODE_ROW_MIME]
+
+    def mimeData(self, indexes: list[QtCore.QModelIndex]) -> QtCore.QMimeData:
+        mime = QtCore.QMimeData()
+        rows = sorted({index.row() for index in indexes if index.isValid()})
+        if len(rows) == 1:
+            mime.setData(self.NODE_ROW_MIME, str(rows[0]).encode("ascii"))
+        return mime
+
+    def canDropMimeData(
+        self,
+        data: QtCore.QMimeData,
+        action: QtCore.Qt.DropAction,
+        row: int,
+        column: int,
+        parent: QtCore.QModelIndex,
+    ) -> bool:
+        if action == QtCore.Qt.DropAction.IgnoreAction:
+            return True
+        if action != QtCore.Qt.DropAction.MoveAction or not data.hasFormat(self.NODE_ROW_MIME):
+            return False
+        source_row = _mime_row(data, self.NODE_ROW_MIME)
+        if source_row is None or source_row < 0 or source_row >= self.rowCount():
+            return False
+        target_row = _drop_target_row(source_row, row, parent, self.rowCount())
+        return target_row is not None and target_row != source_row
+
+    def dropMimeData(
+        self,
+        data: QtCore.QMimeData,
+        action: QtCore.Qt.DropAction,
+        row: int,
+        column: int,
+        parent: QtCore.QModelIndex,
+    ) -> bool:
+        if action == QtCore.Qt.DropAction.IgnoreAction:
+            return True
+        if not self.canDropMimeData(data, action, row, column, parent):
+            return False
+        source_row = _mime_row(data, self.NODE_ROW_MIME)
+        if source_row is None:
+            return False
+        target_row = _drop_target_row(source_row, row, parent, self.rowCount())
+        return target_row is not None and self.move_row(source_row, target_row) is not None
+
     def graph(self) -> EditGraph:
         return self._graph
 
@@ -266,6 +490,40 @@ class OperationGraphModel(QtCore.QAbstractTableModel):
         self._node_audit_badges.pop(nodes[row].id, None)
         self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1), [])
         return nodes[row]
+
+    def set_node_enabled(self, row: int, enabled: bool) -> OperationNode | None:
+        if row < 0 or row >= len(self._graph.nodes):
+            return None
+        nodes = list(self._graph.nodes)
+        node = nodes[row]
+        if node.enabled == enabled:
+            return node
+        nodes[row] = node.model_copy(update={"enabled": enabled})
+        self._graph = self._graph.with_nodes(nodes)
+        self._clear_evaluation_state()
+        self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1), [])
+        return nodes[row]
+
+    def move_row(self, row: int, target_row: int) -> OperationNode | None:
+        if row < 0 or row >= len(self._graph.nodes):
+            return None
+        if target_row < 0 or target_row >= len(self._graph.nodes) or target_row == row:
+            return None
+        nodes = list(self._graph.nodes)
+        destination_child = target_row if target_row < row else target_row + 1
+        self.beginMoveRows(
+            QtCore.QModelIndex(),
+            row,
+            row,
+            QtCore.QModelIndex(),
+            destination_child,
+        )
+        node = nodes.pop(row)
+        nodes.insert(target_row, node)
+        self._graph = self._graph.with_nodes(nodes)
+        self._clear_evaluation_state()
+        self.endMoveRows()
+        return node
 
     def clear(self) -> None:
         if not self._graph.nodes:
@@ -354,6 +612,9 @@ class GraphEvaluationHistoryRow:
     artifact_count: int
     audit_badge: str
     message: str
+    history_id: str = ""
+    resource_uri: str = ""
+    mcp_links: dict[str, object] = field(default_factory=dict)
     details: dict[str, object] = field(default_factory=dict)
 
 
@@ -464,6 +725,9 @@ class OperationGraphHistoryModel(QtCore.QAbstractTableModel):
         payloads: list[dict[str, object]] = []
         for row in self._rows:
             payload = asdict(row)
+            for key in ("history_id", "resource_uri", "mcp_links"):
+                if not payload[key]:
+                    del payload[key]
             if not payload["details"]:
                 del payload["details"]
             payloads.append(payload)
@@ -485,6 +749,33 @@ class OperationGraphHistoryModel(QtCore.QAbstractTableModel):
 def _node_id(kind: str, index: int) -> str:
     safe_kind = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in kind)
     return f"n{index}_{safe_kind[:40]}"
+
+
+def _mime_row(data: QtCore.QMimeData, mime_type: str) -> int | None:
+    try:
+        return int(bytes(data.data(mime_type)).decode("ascii"))
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _drop_target_row(
+    source_row: int,
+    row: int,
+    parent: QtCore.QModelIndex,
+    row_count: int,
+) -> int | None:
+    if row_count <= 0:
+        return None
+    if parent.isValid():
+        row = parent.row()
+    if row < 0:
+        row = row_count
+    if row > row_count:
+        return None
+    target_row = row - 1 if source_row < row else row
+    if target_row >= row_count:
+        target_row = row_count - 1
+    return target_row if target_row >= 0 else None
 
 
 def _params_text(params: dict[str, object]) -> str:
@@ -510,6 +801,26 @@ def _status_color(status: str) -> QtGui.QColor:
     if status in {"stub", "pending", "planned", "skipped", "warnings"}:
         return QtGui.QColor("#B9822B")
     return QtGui.QColor("#B34848")
+
+
+def _diagnostic_color(state: str, severity: str) -> QtGui.QColor:
+    if state == "resolved":
+        return QtGui.QColor("#1F8F3A")
+    if state in {"remaining", "new"} or severity == "error":
+        return QtGui.QColor("#B34848")
+    if severity == "warning" or state == "planned":
+        return QtGui.QColor("#B9822B")
+    return QtGui.QColor("#777777")
+
+
+def _delta_color(severity: str) -> QtGui.QColor:
+    if severity == "added":
+        return QtGui.QColor("#1F8F3A")
+    if severity == "removed":
+        return QtGui.QColor("#B34848")
+    if severity == "changed":
+        return QtGui.QColor("#B9822B")
+    return QtGui.QColor("#777777")
 
 
 def _badge_color(column: int, node: OperationNode, model: OperationGraphModel) -> QtGui.QColor:
@@ -698,6 +1009,7 @@ def _result_message(result: EvaluationResult) -> str:
 
 def _history_row_from_payload(payload: dict[str, object]) -> GraphEvaluationHistoryRow:
     details = payload.get("details")
+    links = payload.get("mcp_links")
     return GraphEvaluationHistoryRow(
         graph_id=str(payload.get("graph_id") or ""),
         status=str(payload.get("status") or "skipped"),
@@ -706,15 +1018,22 @@ def _history_row_from_payload(payload: dict[str, object]) -> GraphEvaluationHist
         artifact_count=int(payload.get("artifact_count") or 0),
         audit_badge=str(payload.get("audit_badge") or ""),
         message=str(payload.get("message") or ""),
+        history_id=str(payload.get("history_id") or ""),
+        resource_uri=str(payload.get("resource_uri") or ""),
+        mcp_links=dict(links) if isinstance(links, dict) else {},
         details=dict(details) if isinstance(details, dict) else {},
     )
 
 
 __all__ = [
     "GraphEvaluationHistoryRow",
+    "GraphHistoryDeltaModel",
+    "GraphHistoryDeltaRow",
     "GraphResultResource",
     "GraphResultResourceModel",
     "OperationGraphHistoryModel",
     "OperationGraphModel",
     "OperationPaletteModel",
+    "RetargetDiagnosticModel",
+    "RetargetDiagnosticRow",
 ]

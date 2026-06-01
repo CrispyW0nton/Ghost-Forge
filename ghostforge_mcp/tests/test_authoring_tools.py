@@ -102,6 +102,7 @@ def test_graph_tools_registered():
         "reorder_graph_nodes",
         "evaluate_edit_graph",
         "submit_evaluate_edit_graph",
+        "compare_scene_graph_history",
     }
     missing = expected - names
     assert not missing, f"missing P11 tools: {missing}"
@@ -116,8 +117,71 @@ def test_graph_resources_registered():
 
     assert "ghostforge://operations" in resource_uris
     assert "ghostforge://graphs" in resource_uris
+    assert "ghostforge://scenes" in resource_uris
     assert "ghostforge://graphs/{graph_id}" in template_uris
     assert "ghostforge://graphs/{graph_id}/evaluation" in template_uris
+    assert "ghostforge://scenes/{scene_id}" in template_uris
+    assert "ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history" in template_uris
+    assert "ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history/{history_id}" in template_uris
+    assert (
+        "ghostforge://scenes/{scene_id}/objects/{object_id}/graph-history/"
+        "{left_history_id}/compare/{right_history_id}"
+    ) in template_uris
+
+
+def test_graph_workflow_prompts_registered_and_render():
+    server = _server()
+    prompts = asyncio.run(server.list_prompts())
+    names = {prompt.name for prompt in prompts}
+
+    assert {
+        "generate_engine_ready_prop",
+        "repair_generated_mesh_for_unity",
+        "prepare_unreal_static_mesh_package",
+    }.issubset(names)
+
+    prop = asyncio.run(
+        server.get_prompt(
+            "generate_engine_ready_prop",
+            {
+                "asset_prompt": "a stylized sci-fi crate",
+                "target_engine": "unity",
+                "art_direction": "clean bevels, painted panels",
+                "target_path": "Assets/GhostForge/Crate.glb",
+            },
+        )
+    )
+    prop_text = prop.messages[0].content.text
+    assert "list_worker_capabilities" in prop_text
+    assert "submit_evaluate_edit_graph" in prop_text
+    assert "create_engine_export_bridge" in prop_text
+
+    repair = asyncio.run(
+        server.get_prompt(
+            "repair_generated_mesh_for_unity",
+            {
+                "scene_id": "level_one",
+                "object_id": "obj_cube",
+                "history_id": "hist_123",
+            },
+        )
+    )
+    repair_text = repair.messages[0].content.text
+    assert "ghostforge://scenes/level_one/objects/obj_cube/graph-history/hist_123" in repair_text
+    assert "preset='unity'" in repair_text
+
+    unreal = asyncio.run(
+        server.get_prompt(
+            "prepare_unreal_static_mesh_package",
+            {
+                "asset_dir": "C:/GhostForge/assets/crate",
+                "target_path": "/Game/GhostForge/Crate",
+            },
+        )
+    )
+    unreal_text = unreal.messages[0].content.text
+    assert "ghostforge_bridge_unreal.json" in unreal_text
+    assert "send_to_unreal" in unreal_text
 
 
 def test_list_operations_includes_builtins():
@@ -134,6 +198,8 @@ def test_list_operations_includes_builtins():
     text_source = next(op for op in payload if op["kind"] == "generate_text_to_3d")
     assert text_source["operation_type"] == "source"
     assert text_source["capability"] == "text_to_3d"
+    texture = next(op for op in payload if op["kind"] == "worker_texture_mesh")
+    assert texture["parameter_presets"][0]["label"] == "Realtime 1K"
 
 
 def test_operation_resource_matches_tool_payload():
@@ -143,6 +209,141 @@ def test_operation_resource_matches_tool_payload():
 
     assert resource_payload["operations"][0]["kind"] == tool_payload[0]["kind"]
     assert any(op["kind"] == "worker_texture_mesh" for op in resource_payload["operations"])
+
+
+def test_scene_resources_expose_graph_history_links(tmp_path):
+    scene_dir = tmp_path / "project" / "scenes"
+    scene_dir.mkdir(parents=True)
+    scene_path = scene_dir / "level_one.gforge"
+    scene_path.write_text(
+        json.dumps(
+            {
+                "document_version": "1.0",
+                "application": "Ghost Forge",
+                "saved_at": "2026-06-01T10:00:00Z",
+                "project_root": str(tmp_path / "project"),
+                "objects": [
+                    {
+                        "object_id": "obj_cube",
+                        "name": "Cube",
+                        "path": str(tmp_path / "cube.glb"),
+                        "operation_graph": {"graph_id": "obj_cube_graph"},
+                        "operation_graph_history": [
+                            {
+                                "graph_id": "obj_cube_graph",
+                                "status": "succeeded",
+                                "output_path": str(tmp_path / "cube_out.glb"),
+                                "duration_ms": 12.0,
+                                "artifact_count": 1,
+                                "audit_badge": "passed",
+                                "message": "audit passed",
+                                "details": {
+                                    "artifact_paths": [str(tmp_path / "cube_out.glb")],
+                                    "manifest_paths": [str(tmp_path / "asset_manifest.json")],
+                                    "audit_history": {
+                                        "preset": "unity",
+                                        "status": "passed",
+                                        "error_count": 0,
+                                        "warning_count": 0,
+                                        "audit_issue_list": [],
+                                    },
+                                },
+                            },
+                            {
+                                "graph_id": "obj_cube_graph",
+                                "status": "succeeded",
+                                "output_path": str(tmp_path / "cube_repaired.glb"),
+                                "duration_ms": 20.0,
+                                "artifact_count": 3,
+                                "audit_badge": "warnings",
+                                "message": "audit warnings",
+                                "details": {
+                                    "artifact_paths": [
+                                        str(tmp_path / "cube_repaired.glb"),
+                                        str(tmp_path / "albedo.png"),
+                                    ],
+                                    "manifest_paths": [str(tmp_path / "asset_manifest.json")],
+                                    "bridge_paths": [str(tmp_path / "ghostforge_bridge_unity.json")],
+                                    "retarget_resolved": ["retarget.axis:axis_mismatch_assumed"],
+                                    "audit_history": {
+                                        "preset": "unity",
+                                        "status": "warnings",
+                                        "error_count": 0,
+                                        "warning_count": 1,
+                                        "audit_issue_list": [
+                                            "warning texture:missing_metallic: Metallic texture is absent."
+                                        ],
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = _server()
+
+    scenes = _resource_payload(asyncio.run(server.read_resource("ghostforge://scenes")))
+    assert scenes["scenes"][0]["scene_id"] == "level_one"
+    assert scenes["scenes"][0]["object_count"] == 1
+
+    scene = _resource_payload(asyncio.run(server.read_resource("ghostforge://scenes/level_one")))
+    history = scene["objects"][0]["operation_graph_history"][0]
+    assert history["history_id"].startswith("obj_cube_graph_succeeded_")
+    assert history["mcp_links"]["graph"] == "ghostforge://graphs/obj_cube_graph"
+    assert history["mcp_links"]["scene"] == "ghostforge://scenes/level_one"
+
+    history_list = _resource_payload(
+        asyncio.run(
+            server.read_resource("ghostforge://scenes/level_one/objects/obj_cube/graph-history")
+        )
+    )
+    assert history_list["history"][0]["history_id"] == history["history_id"]
+    assert len(history_list["history"]) == 2
+
+    history_item = _resource_payload(
+        asyncio.run(
+            server.read_resource(
+                f"ghostforge://scenes/level_one/objects/obj_cube/graph-history/{history['history_id']}"
+            )
+        )
+    )
+    assert history_item["resource_uri"] == history["resource_uri"]
+
+    left_id = history_list["history"][0]["history_id"]
+    right_id = history_list["history"][1]["history_id"]
+    comparison = _call(
+        server,
+        "compare_scene_graph_history",
+        {
+            "scene_id": "level_one",
+            "object_id": "obj_cube",
+            "left_history_id": left_id,
+            "right_history_id": right_id,
+        },
+    )
+    assert comparison["comparison"]["has_changes"]
+    assert comparison["comparison"]["changed_fields"]["audit_badge"] == {
+        "left": "passed",
+        "right": "warnings",
+    }
+    assert str(tmp_path / "cube_repaired.glb") in comparison["comparison"]["detail_changes"]["artifact_paths"]["added"]
+    assert comparison["comparison"]["audit_changes"]["changed_fields"]["warning_count"] == {
+        "left": 0,
+        "right": 1,
+    }
+
+    resource_comparison = _resource_payload(
+        asyncio.run(
+            server.read_resource(
+                "ghostforge://scenes/level_one/objects/obj_cube/graph-history/"
+                f"{left_id}/compare/{right_id}"
+            )
+        )
+    )
+    assert resource_comparison["resource_uri"] == comparison["resource_uri"]
 
 
 def test_create_get_delete_graph_round_trip():
