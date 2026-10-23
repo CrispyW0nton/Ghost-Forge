@@ -52,6 +52,7 @@ from ghostforge_core.scene_links import (
     compare_graph_history_payloads,
     graph_history_comparison_resource_uri,
     graph_resource_uri,
+    plan_graph_history_followup_actions,
     scene_id_for_path,
     scene_resource_uri,
 )
@@ -130,6 +131,1295 @@ def _operation_descriptors_payload() -> list[dict[str, Any]]:
         )
         payload.append(item)
     return payload
+
+
+def _cad_command_payloads() -> list[dict[str, Any]]:
+    from ghostforge_core.cad import build_default_cad_registry
+
+    registry = build_default_cad_registry()
+    return [command.model_dump(mode="json") for command in registry.all()]
+
+
+def _cad_command_payload(command_id: str) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_cad_registry
+
+    registry = build_default_cad_registry()
+    try:
+        return registry.get(command_id).model_dump(mode="json")
+    except KeyError as exc:
+        known = [command["command_id"] for command in _cad_command_payloads()]
+        raise KeyError(f"Unknown CAD command {command_id!r}. Known: {known}") from exc
+
+
+def _cad_execution_contract_payload() -> dict[str, Any]:
+    return {
+        "runtime_dependency": "none",
+        "plasticity_role": "development_evidence_only",
+        "stages": [
+            "collect_selection_context",
+            "resolve_parameters_and_options",
+            "preflight_selection_parameters_and_handler_state",
+            "build_preview_or_commit_result",
+            "record_topology_delta_undo_and_manifest",
+        ],
+        "preflight_inputs": {
+            "command_id": "CAD descriptor id from ghostforge://cad/commands",
+            "selection_items": "List of object/subobject selections with object_id, object_kind, selection_kind, topology_id, and order.",
+            "active_object_id": "Current modeling target when the command requires one.",
+            "active_plane_id": "Construction plane id for commands that require one.",
+            "parameters": "Command parameter values keyed by descriptor parameter name.",
+            "option_panel_state": "Option-panel values keyed by descriptor option name.",
+        },
+        "structured_outputs": [
+            "CadCommandContext",
+            "CadPreflightReport",
+            "CadCommandResult",
+            "CadTopologyDelta",
+            "CadUndoRecord",
+            "CadManifestEvent",
+        ],
+    }
+
+
+def _cad_operation_graph_contract_payload() -> dict[str, Any]:
+    from ghostforge_core.cad import (
+        CadMeshEmissionProfile,
+        CadOperationGraph,
+        CadOperationGraphValidationReport,
+        CadOperationNode,
+        CadTopologyLineageRecord,
+    )
+
+    return {
+        "runtime_dependency": "none",
+        "plasticity_role": "development_evidence_only",
+        "status": "native_validation_surface",
+        "purpose": (
+            "Validate AI-authored or tool-authored editable CAD construction graphs "
+            "against Ghost Forge command descriptors before any geometry kernel, mesher, "
+            "or export step mutates document state."
+        ),
+        "source_artifacts": [
+            "PlasticityMCP/knowledge_base/ghost_forge_operation_graph_contract.json",
+            "PlasticityMCP/knowledge_base/ghost_forge_ai_geometry_compiler_plan.json",
+        ],
+        "input_contract": {
+            "tool": "validate_cad_operation_graph",
+            "argument": "graph",
+            "graph_model": "CadOperationGraph",
+            "minimum_graph_fields": ["graph_id", "nodes"],
+            "minimum_node_fields": ["node_id", "command_id"],
+            "recommended_node_fields": [
+                "parameters",
+                "selection",
+                "inputs",
+                "outputs",
+                "descriptor_status",
+            ],
+            "stable_reference_rule": (
+                "Inputs and outputs should use entity_id/topology_id references that resolve "
+                "through entity_table and topology_table; do not rely on transient viewport order."
+            ),
+        },
+        "validation_gates": [
+            "payload_schema_valid",
+            "node_ids_unique",
+            "edge_ids_unique",
+            "construction_graph_acyclic",
+            "commands_exist_in_descriptor_registry",
+            "parameters_declared_by_descriptor",
+            "selection_and_active_context_pass_preflight",
+            "input_referenced_entities_exist",
+            "input_referenced_topology_lineage_exists",
+        ],
+        "output_contract": {
+            "summary": [
+                "ok",
+                "status",
+                "diagnostic_count",
+                "error_count",
+                "warning_count",
+                "replay_step_count",
+            ],
+            "validation": "CadOperationGraphValidationReport",
+            "replay_plan_rule": "Returned only when no error diagnostics are present.",
+        },
+        "execution_contract": {
+            "tool": "execute_cad_operation_graph",
+            "mutation": "writes_output_mesh_and_asset_manifest",
+            "supported_descriptor_status": "implemented_mesh",
+            "blocked_descriptor_statuses": ["planned", "controlled_probe_needed", "alias", "option", "contextual_mode"],
+            "required_arguments": ["graph", "output_dir"],
+            "optional_arguments": ["input_mesh_path", "output_format", "asset_id"],
+            "source_graph_rule": (
+                "Graphs whose first replayed node is a source primitive or generation node can omit "
+                "input_mesh_path; modifier-only graphs must pass input_mesh_path or will return "
+                "executor.input_mesh_required."
+            ),
+            "outputs": [
+                "CadOperationGraphExecutionResult",
+                "output mesh artifact",
+                "asset_manifest.json",
+                "topology lineage table updates",
+                "mesh quality report",
+            ],
+            "honesty_rule": (
+                "This execution prototype does not run future B-rep/NURBS CAD kernel nodes; "
+                "planned commands remain blocked with diagnostics."
+            ),
+        },
+        "schemas": {
+            "CadOperationGraph": CadOperationGraph.model_json_schema(),
+            "CadOperationNode": CadOperationNode.model_json_schema(),
+            "CadTopologyLineageRecord": CadTopologyLineageRecord.model_json_schema(),
+            "CadMeshEmissionProfile": CadMeshEmissionProfile.model_json_schema(),
+            "CadOperationGraphValidationReport": CadOperationGraphValidationReport.model_json_schema(),
+        },
+    }
+
+
+def _cad_graph_validation_summary(report: Any) -> dict[str, Any]:
+    diagnostics = list(getattr(report, "diagnostics", ()) or ())
+    error_count = sum(1 for diagnostic in diagnostics if getattr(diagnostic, "severity", "") == "error")
+    warning_count = sum(1 for diagnostic in diagnostics if getattr(diagnostic, "severity", "") == "warning")
+    return {
+        "ok": bool(getattr(report, "ok", False)),
+        "status": getattr(report, "status", "invalid"),
+        "diagnostic_count": len(diagnostics),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "replay_step_count": len(getattr(report, "replay_plan", ()) or ()),
+    }
+
+
+def _cad_validation_error_payload(graph: Any, exc: Exception) -> dict[str, Any]:
+    from ghostforge_core.cad import CadGraphDiagnostic, CadOperationGraphValidationReport
+
+    graph_id = "invalid_graph_payload"
+    if isinstance(graph, dict) and graph.get("graph_id"):
+        graph_id = str(graph["graph_id"])
+
+    errors: list[dict[str, Any]] = []
+    raw_errors = getattr(exc, "errors", None)
+    if callable(raw_errors):
+        for error in raw_errors():
+            if isinstance(error, dict):
+                errors.append(
+                    {
+                        key: value
+                        for key, value in error.items()
+                        if key not in {"ctx", "input", "url"}
+                    }
+                )
+    if not errors:
+        errors.append({"message": str(exc)})
+
+    report = CadOperationGraphValidationReport(
+        graph_id=graph_id,
+        ok=False,
+        diagnostics=(
+            CadGraphDiagnostic(
+                code="graph.payload_invalid",
+                message="CAD operation graph payload did not match the Ghost Forge graph schema.",
+                topology_report={"schema_errors": errors},
+                repair_suggestions=("Read ghostforge://cad/operation-graph-contract and resubmit a CadOperationGraph payload.",),
+            ),
+        ),
+    )
+    return {
+        "runtime_dependency": "none",
+        "plasticity_role": "development_evidence_only",
+        "graph": graph if isinstance(graph, dict) else None,
+        "summary": _cad_graph_validation_summary(report),
+        "validation": report.model_dump(mode="json"),
+    }
+
+
+def _cad_operation_graph_validation_payload(graph: dict[str, Any]) -> dict[str, Any]:
+    from ghostforge_core.cad import (
+        CadOperationGraph,
+        build_default_cad_registry,
+        validate_cad_operation_graph,
+    )
+
+    try:
+        operation_graph = CadOperationGraph.model_validate(graph)
+    except Exception as exc:
+        return _cad_validation_error_payload(graph, exc)
+
+    report = validate_cad_operation_graph(operation_graph, build_default_cad_registry())
+    return {
+        "runtime_dependency": "none",
+        "plasticity_role": "development_evidence_only",
+        "contract_resource": "ghostforge://cad/operation-graph-contract",
+        "graph": operation_graph.model_dump(mode="json"),
+        "summary": _cad_graph_validation_summary(report),
+        "validation": report.model_dump(mode="json"),
+        "notes": [
+            "This tool validates graph structure, descriptor usage, selection context, and replay order only.",
+            "It does not execute a geometry kernel, write scene files, emit meshes, or call Plasticity.",
+            "Agents should revise failed nodes from diagnostics before submitting work to future kernel/mesh stages.",
+        ],
+    }
+
+
+def _cad_operation_graph_execution_payload(
+    graph: dict[str, Any],
+    output_dir: str,
+    input_mesh_path: str | None = None,
+    output_format: str = "glb",
+    asset_id: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import CadOperationGraph, execute_cad_operation_graph
+
+    try:
+        operation_graph = CadOperationGraph.model_validate(graph)
+    except Exception as exc:
+        return _cad_validation_error_payload(graph, exc)
+
+    result = execute_cad_operation_graph(
+        operation_graph,
+        output_dir=Path(output_dir),
+        input_mesh_path=Path(input_mesh_path) if input_mesh_path else None,
+        output_format=output_format,
+        asset_id=asset_id,
+    )
+    payload = result.model_dump(mode="json")
+    payload.update(
+        {
+            "runtime_dependency": "none",
+            "plasticity_role": "development_evidence_only",
+            "mutation": "writes_output_mesh_and_asset_manifest",
+            "contract_resource": "ghostforge://cad/operation-graph-contract",
+            "notes": [
+                "This tool executes only implemented mesh-backed CAD descriptors.",
+                "Source graphs can omit input_mesh_path; process-only graphs require an input mesh.",
+                "Planned B-rep/NURBS commands remain blocked until native kernel handlers exist.",
+                "Successful runs write a mesh artifact and asset_manifest.json under output_dir.",
+            ],
+        }
+    )
+    return payload
+
+
+def _cad_preflight_payload(
+    command_id: str,
+    selection_items: list[dict[str, Any]] | None = None,
+    active_object_id: str | None = None,
+    active_plane_id: str | None = None,
+    parameters: dict[str, Any] | None = None,
+    option_panel_state: dict[str, Any] | None = None,
+    preview_requested: bool = True,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import (
+        CadSelectionItem,
+        CadSelectionSet,
+        build_default_cad_registry,
+        build_preview_result,
+        preflight_cad_command,
+        resolve_cad_command_context,
+    )
+
+    registry = build_default_cad_registry()
+    try:
+        descriptor = registry.get(command_id)
+    except KeyError as exc:
+        known = [command["command_id"] for command in _cad_command_payloads()]
+        raise KeyError(f"Unknown CAD command {command_id!r}. Known: {known}") from exc
+
+    selection = CadSelectionSet(
+        items=tuple(CadSelectionItem(**item) for item in (selection_items or [])),
+        active_object_id=active_object_id,
+        active_plane_id=active_plane_id,
+    )
+    context = resolve_cad_command_context(
+        descriptor,
+        selection=selection,
+        parameters=parameters,
+        option_panel_state=option_panel_state,
+        preview_requested=preview_requested,
+    )
+    preflight = preflight_cad_command(descriptor, context)
+    preview = build_preview_result(descriptor, context, preflight)
+    return {
+        "runtime_dependency": "none",
+        "plasticity_role": "development_evidence_only",
+        "descriptor": descriptor.model_dump(mode="json"),
+        "context": context.model_dump(mode="json"),
+        "preflight": preflight.model_dump(mode="json"),
+        "preview_result": preview.model_dump(mode="json"),
+    }
+
+
+def _cad_fixture_payloads() -> list[dict[str, Any]]:
+    from ghostforge_core.cad import build_default_fixture_catalog
+
+    catalog = build_default_fixture_catalog()
+    return [fixture.model_dump(mode="json") for fixture in catalog.all_fixtures()]
+
+
+def _cad_fixture_payload(fixture_id: str) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_fixture_catalog
+
+    catalog = build_default_fixture_catalog()
+    try:
+        return catalog.get_fixture(fixture_id).model_dump(mode="json")
+    except KeyError as exc:
+        known = [fixture["fixture_id"] for fixture in _cad_fixture_payloads()]
+        raise KeyError(f"Unknown CAD fixture {fixture_id!r}. Known: {known}") from exc
+
+
+def _cad_fixture_expectation_payloads(command_id: str | None = None) -> list[dict[str, Any]]:
+    from ghostforge_core.cad import build_default_fixture_catalog
+
+    catalog = build_default_fixture_catalog()
+    expectations = (
+        catalog.expectations_for_command(command_id)
+        if command_id
+        else list(catalog.expectations)
+    )
+    return [expectation.model_dump(mode="json") for expectation in expectations]
+
+
+def _cad_behavior_matrix_payload(
+    command_id: str | None = None,
+    result_state: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_behavior_matrix
+
+    matrix = build_default_behavior_matrix()
+    cases = [case.model_dump(mode="json") for case in matrix.all_cases()]
+    if command_id:
+        cases = [case for case in cases if case.get("command_id") == command_id]
+    if result_state:
+        cases = [case for case in cases if case.get("result_state") == result_state]
+    summary = matrix.summary()
+    summary.update(
+        {
+            "filtered_case_count": len(cases),
+            "filters": {"command_id": command_id, "result_state": result_state},
+        }
+    )
+    return {
+        "summary": summary,
+        "cases": cases,
+        "notes": [
+            "Behavior cases are Ghost Forge native implementation contracts for fixture-level command behavior.",
+            "Plasticity evidence status identifies what still needs live comparison evidence; it is not a runtime dependency.",
+        ],
+    }
+
+
+def _cad_behavior_case_payload(case_id: str) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_behavior_matrix
+
+    matrix = build_default_behavior_matrix()
+    try:
+        return matrix.get(case_id).model_dump(mode="json")
+    except KeyError as exc:
+        known = [case["case_id"] for case in _cad_behavior_matrix_payload()["cases"]]
+        raise KeyError(f"Unknown CAD behavior case {case_id!r}. Known: {known}") from exc
+
+
+def _cad_probe_matrix_payload() -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_probe_matrix
+
+    matrix = build_default_probe_matrix()
+    return {
+        "summary": matrix.summary(),
+        "command_plans": [plan.model_dump(mode="json") for plan in matrix.all_command_plans()],
+        "format_plans": [plan.model_dump(mode="json") for plan in matrix.all_format_plans()],
+        "static_asset_plans": [plan.model_dump(mode="json") for plan in matrix.all_static_asset_plans()],
+    }
+
+
+def _cad_command_probe_plan_payload(command_id: str) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_probe_matrix
+
+    matrix = build_default_probe_matrix()
+    try:
+        return matrix.get_command_plan(command_id).model_dump(mode="json")
+    except KeyError as exc:
+        known = [plan["command_id"] for plan in _cad_probe_matrix_payload()["command_plans"]]
+        raise KeyError(f"Unknown CAD probe command {command_id!r}. Known: {known}") from exc
+
+
+def _cad_logic_blueprint_payload(command_id: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_logic_blueprint
+
+    blueprint = build_default_logic_blueprint()
+    patterns = (
+        blueprint.patterns_for_command(command_id)
+        if command_id
+        else blueprint.all_patterns()
+    )
+    return {
+        "summary": {
+            **blueprint.summary(),
+            "filtered_pattern_count": len(patterns),
+            "filters": {"command_id": command_id},
+            "runtime_dependency": "none",
+            "plasticity_role": "development_evidence_only",
+        },
+        "patterns": [pattern.model_dump(mode="json") for pattern in patterns],
+    }
+
+
+def _cad_logic_pattern_payload(pattern_id: str) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_logic_blueprint
+
+    blueprint = build_default_logic_blueprint()
+    return blueprint.get(pattern_id).model_dump(mode="json")
+
+
+def _cad_interop_formats_payload(
+    direction: str | None = None,
+    family: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_interop_registry
+
+    registry = build_default_interop_registry()
+    formats = [descriptor.model_dump(mode="json") for descriptor in registry.all()]
+    if direction:
+        formats = [descriptor for descriptor in formats if direction in descriptor.get("directions", [])]
+    if family:
+        formats = [descriptor for descriptor in formats if descriptor.get("family") == family]
+    summary = registry.summary()
+    summary.update(
+        {
+            "filtered_format_count": len(formats),
+            "filters": {"direction": direction, "family": family},
+        }
+    )
+    return {
+        "summary": summary,
+        "formats": formats,
+        "notes": [
+            "Format descriptors are Ghost Forge native contracts. Plasticity translator files and static assets are evidence only.",
+            "File-touching automation must use workspace-controlled paths and record translator diagnostics.",
+        ],
+    }
+
+
+def _cad_interop_format_payload(format_id: str) -> dict[str, Any]:
+    from ghostforge_core.cad import build_default_interop_registry
+
+    registry = build_default_interop_registry()
+    try:
+        return registry.get(format_id).model_dump(mode="json")
+    except KeyError as exc:
+        known = [descriptor["format_id"] for descriptor in _cad_interop_formats_payload()["formats"]]
+        raise KeyError(f"Unknown CAD interop format {format_id!r}. Known: {known}") from exc
+
+
+def _cad_development_queue_payload(
+    kb_root: str | None = None,
+    implementation_track: str | None = None,
+    has_blocker: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_ghostforge_cad_development_queue
+
+    queue = build_ghostforge_cad_development_queue(kb_root)
+    tasks = [task.model_dump(mode="json") for task in queue.all_tasks()]
+    if implementation_track:
+        tasks = [task for task in tasks if task.get("implementation_track") == implementation_track]
+    if has_blocker:
+        tasks = [task for task in tasks if has_blocker in task.get("blockers", [])]
+    summary = queue.summary()
+    summary.update(
+        {
+            "filtered_task_count": len(tasks),
+            "filters": {"implementation_track": implementation_track, "has_blocker": has_blocker},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": queue.kb_root,
+        "generated_utc": queue.generated_utc,
+        "source_files": queue.source_files or {},
+        "tasks": tasks,
+        "notes": [
+            "This queue maps Plasticity recon evidence into native Ghost Forge implementation work.",
+            "Plasticity remains development evidence only; Ghost Forge owns the runtime command, fixture, interop, and UI contracts.",
+        ],
+    }
+
+
+def _cad_development_task_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_ghostforge_cad_development_queue
+
+    queue = build_ghostforge_cad_development_queue(kb_root)
+    return queue.get(command_id).model_dump(mode="json")
+
+
+def _cad_automation_runbook_payload(
+    kb_root: str | None = None,
+    route_kind: str | None = None,
+    missing_gate: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_automation_runbook
+
+    runbook = build_cad_automation_runbook(kb_root)
+    routes = [route.model_dump(mode="json") for route in runbook.all_routes()]
+    if route_kind:
+        routes = [route for route in routes if route.get("route_kind") == route_kind]
+    if missing_gate:
+        routes = [
+            route
+            for route in routes
+            if missing_gate
+            in [
+                gate["gate_id"]
+                for gate in route.get("safety_gates", [])
+                if gate.get("required_before_live_execution") and gate.get("status") == "missing"
+            ]
+        ]
+    summary = runbook.summary()
+    summary.update(
+        {
+            "filtered_route_count": len(routes),
+            "filters": {"route_kind": route_kind, "missing_gate": missing_gate},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": runbook.kb_root,
+        "generated_utc": runbook.generated_utc,
+        "routes": routes,
+        "notes": [
+            "Automation routes are declarative safety/evidence runbooks and do not call Plasticity.",
+            "Live execution is allowed only when route, probe package, disposable fixture, and file safety gates are satisfied.",
+        ],
+    }
+
+
+def _cad_automation_route_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_automation_runbook
+
+    runbook = build_cad_automation_runbook(kb_root)
+    return runbook.get(command_id).model_dump(mode="json")
+
+
+def _cad_schema_drafts_payload(
+    kb_root: str | None = None,
+    implementation_track: str | None = None,
+    has_blocker: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_schema_draft_catalog
+
+    catalog = build_cad_schema_draft_catalog(kb_root)
+    drafts = [draft.model_dump(mode="json") for draft in catalog.all_drafts()]
+    if implementation_track:
+        drafts = [draft for draft in drafts if draft.get("implementation_track") == implementation_track]
+    if has_blocker:
+        drafts = [draft for draft in drafts if has_blocker in draft.get("promotion_blockers", [])]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_draft_count": len(drafts),
+            "filters": {"implementation_track": implementation_track, "has_blocker": has_blocker},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "drafts": drafts,
+        "notes": [
+            "Schema drafts are Ghost Forge planning artifacts derived from inferred/observed Plasticity recon templates.",
+            "Template-inferred drafts can guide Qt/MCP panel design but remain blocked until observed schema and reset evidence exist.",
+        ],
+    }
+
+
+def _cad_schema_draft_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_schema_draft_catalog
+
+    catalog = build_cad_schema_draft_catalog(kb_root)
+    draft = catalog.get(command_id)
+    return {
+        **draft.model_dump(mode="json"),
+        "parameter_specs": [spec.model_dump(mode="json") for spec in draft.parameter_specs()],
+    }
+
+
+def _cad_schema_promotion_payload(
+    kb_root: str | None = None,
+    promotion_status: str | None = None,
+    has_blocker: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_schema_promotion_catalog
+
+    catalog = build_cad_schema_promotion_catalog(kb_root)
+    candidates = [candidate.model_dump(mode="json") for candidate in catalog.all_candidates()]
+    if promotion_status:
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.get("promotion_status") == promotion_status
+        ]
+    if has_blocker:
+        candidates = [
+            candidate
+            for candidate in candidates
+            if has_blocker in candidate.get("blockers", [])
+        ]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_candidate_count": len(candidates),
+            "filters": {"promotion_status": promotion_status, "has_blocker": has_blocker},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "candidates": candidates,
+        "notes": [
+            "Schema promotion candidates separate inferred templates from observed Plasticity evidence.",
+            "A command is promotable only after observed controls, required evidence, validation checks, and reset verification pass.",
+        ],
+    }
+
+
+def _cad_schema_promotion_candidate_payload(
+    command_id: str,
+    kb_root: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_schema_promotion_catalog
+
+    catalog = build_cad_schema_promotion_catalog(kb_root)
+    candidate = catalog.get(command_id)
+    return {
+        **candidate.model_dump(mode="json"),
+        "parameter_specs": [spec.model_dump(mode="json") for spec in candidate.parameter_specs()],
+    }
+
+
+def _cad_evidence_packets_payload(
+    kb_root: str | None = None,
+    packet_kind: str | None = None,
+    readiness: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_evidence_packet_catalog
+
+    catalog = build_cad_evidence_packet_catalog(kb_root)
+    packets = [packet.model_dump(mode="json") for packet in catalog.all_packets()]
+    if packet_kind:
+        packets = [packet for packet in packets if packet.get("packet_kind") == packet_kind]
+    if readiness:
+        packets = [packet for packet in packets if packet.get("readiness") == readiness]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_packet_count": len(packets),
+            "filters": {"packet_kind": packet_kind, "readiness": readiness},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "packets": packets,
+        "notes": [
+            "Evidence packet plans define the exact artifact a live Plasticity probe must capture.",
+            "Packets feed schema promotion, behavior fixtures, robustness contracts, interop descriptors, and static-owner classification.",
+        ],
+    }
+
+
+def _cad_evidence_packet_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_evidence_packet_catalog
+
+    catalog = build_cad_evidence_packet_catalog(kb_root)
+    return catalog.get(command_id).model_dump(mode="json")
+
+
+def _cad_probe_batches_payload(
+    kb_root: str | None = None,
+    batch_kind: str | None = None,
+    packet_kind: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_probe_batch_plan
+
+    plan = build_cad_probe_batch_plan(kb_root)
+    batches = [batch.model_dump(mode="json") for batch in plan.all_batches()]
+    if batch_kind:
+        batches = [batch for batch in batches if batch.get("batch_kind") == batch_kind]
+    if packet_kind:
+        batches = [batch for batch in batches if batch.get("packet_kind") == packet_kind]
+    summary = plan.summary()
+    summary.update(
+        {
+            "filtered_batch_count": len(batches),
+            "filters": {"batch_kind": batch_kind, "packet_kind": packet_kind},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": plan.kb_root,
+        "generated_utc": plan.generated_utc,
+        "batches": batches,
+        "notes": [
+            "Probe batches order evidence packets into ready capture, package generation, static-owner resolution, safety repair, and promotion follow-up work.",
+            "Batches are planning contracts only; Plasticity is still development evidence, not a Ghost Forge runtime dependency.",
+        ],
+    }
+
+
+def _cad_probe_batch_payload(batch_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_probe_batch_plan
+
+    plan = build_cad_probe_batch_plan(kb_root)
+    return plan.get(batch_id).model_dump(mode="json")
+
+
+def _cad_live_probe_sessions_payload(
+    kb_root: str | None = None,
+    session_mode: str | None = None,
+    packet_kind: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_live_probe_session_catalog
+
+    catalog = build_cad_live_probe_session_catalog(kb_root)
+    sessions = [session.model_dump(mode="json") for session in catalog.all_sessions()]
+    if session_mode:
+        sessions = [session for session in sessions if session.get("session_mode") == session_mode]
+    if packet_kind:
+        sessions = [session for session in sessions if session.get("packet_kind") == packet_kind]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_session_count": len(sessions),
+            "filters": {"session_mode": session_mode, "packet_kind": packet_kind},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "sessions": sessions,
+        "notes": [
+            "Live probe sessions are plan-only step sequences derived from batches and evidence packets.",
+            "They do not execute Plasticity; they define guarded manual/automation capture order and evidence outputs.",
+        ],
+    }
+
+
+def _cad_live_probe_session_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_live_probe_session_catalog
+
+    catalog = build_cad_live_probe_session_catalog(kb_root)
+    return catalog.get(command_id).model_dump(mode="json")
+
+
+def _cad_observation_templates_payload(
+    kb_root: str | None = None,
+    session_mode: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_observation_template_catalog
+
+    catalog = build_cad_observation_template_catalog(kb_root)
+    templates = [template.model_dump(mode="json") for template in catalog.all_templates()]
+    if session_mode:
+        templates = [template for template in templates if template.get("session_mode") == session_mode]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_template_count": len(templates),
+            "filters": {"session_mode": session_mode},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "templates": templates,
+        "notes": [
+            "Observation templates are empty receiving records for completed live Plasticity captures.",
+            "A filled record must validate before it can feed Ghost Forge native schemas, behavior, interop, or static-owner relationships.",
+        ],
+    }
+
+
+def _cad_observation_template_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import observation_template_for_command
+
+    return observation_template_for_command(command_id, kb_root).model_dump(mode="json")
+
+
+def _cad_observation_validation_payload(
+    observation_record: dict[str, Any],
+    kb_root: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import validate_cad_observation_record
+
+    return validate_cad_observation_record(observation_record, kb_root).model_dump(mode="json")
+
+
+def _cad_observation_ledger_payload(
+    kb_root: str | None = None,
+    status: str | None = None,
+    promotion_target: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import load_cad_observation_ledger
+
+    catalog = load_cad_observation_ledger(kb_root)
+    entries = [entry.model_dump(mode="json") for entry in catalog.all_entries()]
+    if status:
+        entries = [entry for entry in entries if entry.get("validation", {}).get("status") == status]
+    if promotion_target:
+        entries = [
+            entry
+            for entry in entries
+            if promotion_target in entry.get("validation", {}).get("promotion_targets", [])
+        ]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_entry_count": len(entries),
+            "filters": {"status": status, "promotion_target": promotion_target},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "source_files": list(catalog.source_files),
+        "entries": entries,
+        "notes": [
+            "Observation ledger entries are completed Plasticity captures validated against Ghost Forge evidence/session contracts.",
+            "Accepted entries name the exact native Ghost Forge targets they may feed; rejected entries keep their blockers visible.",
+        ],
+    }
+
+
+def _cad_observation_ledger_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import load_cad_observation_ledger
+
+    catalog = load_cad_observation_ledger(kb_root)
+    entries = [entry.model_dump(mode="json") for entry in catalog.entries_for_command(command_id)]
+    return {
+        "command_id": command_id,
+        "kb_root": catalog.kb_root,
+        "entry_count": len(entries),
+        "entries": entries,
+        "latest": entries[-1] if entries else None,
+    }
+
+
+def _cad_native_handoffs_payload(
+    kb_root: str | None = None,
+    handoff_status: str | None = None,
+    target: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_native_handoff_catalog
+
+    catalog = build_cad_native_handoff_catalog(kb_root)
+    handoffs = [handoff.model_dump(mode="json") for handoff in catalog.all_handoffs()]
+    if handoff_status:
+        handoffs = [handoff for handoff in handoffs if handoff.get("handoff_status") == handoff_status]
+    if target:
+        handoffs = [
+            handoff
+            for handoff in handoffs
+            if target in handoff.get("promotion_targets", [])
+            or any(step.get("target") == target or step.get("step_id") == target for step in handoff.get("steps", []))
+        ]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_handoff_count": len(handoffs),
+            "filters": {"handoff_status": handoff_status, "target": target},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "handoffs": handoffs,
+        "notes": [
+            "Native CAD handoffs convert validated observation ledger entries into concrete Ghost Forge implementation steps.",
+            "Rejected captures remain blocked handoffs; accepted captures name descriptor, Qt/MCP schema, handler-test, interop, robustness, or static-owner work.",
+        ],
+    }
+
+
+def _cad_native_handoff_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_native_handoff_catalog
+
+    catalog = build_cad_native_handoff_catalog(kb_root)
+    handoffs = [handoff.model_dump(mode="json") for handoff in catalog.handoffs_for_command(command_id)]
+    return {
+        "command_id": command_id,
+        "kb_root": catalog.kb_root,
+        "handoff_count": len(handoffs),
+        "handoffs": handoffs,
+        "latest": handoffs[-1] if handoffs else None,
+    }
+
+
+def _cad_capture_campaign_payload(
+    kb_root: str | None = None,
+    status: str | None = None,
+    packet_kind: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_capture_campaign_catalog
+
+    catalog = build_cad_capture_campaign_catalog(kb_root)
+    items = [item.model_dump(mode="json") for item in catalog.all_items()]
+    if status:
+        items = [item for item in items if item.get("status") == status]
+    if packet_kind:
+        items = [item for item in items if item.get("packet_kind") == packet_kind]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_item_count": len(items),
+            "filters": {"status": status, "packet_kind": packet_kind},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "items": items,
+        "notes": [
+            "Capture campaign items join live sessions, observation ledger entries, and native handoffs.",
+            "They tell the next recon pass what to capture, recapture, unblock, or apply inside Ghost Forge.",
+        ],
+    }
+
+
+def _cad_capture_campaign_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_capture_campaign_catalog
+
+    catalog = build_cad_capture_campaign_catalog(kb_root)
+    return catalog.get(command_id).model_dump(mode="json")
+
+
+def _cad_selection_contracts_payload(
+    kb_root: str | None = None,
+    operation_kind: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_selection_contract_catalog
+
+    catalog = build_cad_selection_contract_catalog(kb_root)
+    commands = [contract.model_dump(mode="json") for contract in catalog.all_commands()]
+    if operation_kind:
+        commands = [contract for contract in commands if contract.get("operation_kind") == operation_kind]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_command_count": len(commands),
+            "filters": {"operation_kind": operation_kind},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "generated_utc": catalog.generated_utc,
+        "modes": [mode.model_dump(mode="json") for mode in catalog.all_modes()],
+        "commands": commands,
+        "notes": [
+            "Selection contracts are native Ghost Forge picker/preflight contracts derived from recon evidence.",
+            "They define queryable selection state rather than relying on hidden viewport state.",
+        ],
+    }
+
+
+def _cad_selection_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_selection_contract_catalog
+
+    catalog = build_cad_selection_contract_catalog(kb_root)
+    return catalog.get_command(command_id).model_dump(mode="json")
+
+
+def _cad_robustness_contracts_payload(
+    kb_root: str | None = None,
+    subject_type: str | None = None,
+    has_failure: str | None = None,
+    has_topology_policy: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_robustness_catalog
+
+    catalog = build_cad_robustness_catalog(kb_root)
+    contracts = [contract.model_dump(mode="json") for contract in catalog.all_contracts()]
+    if subject_type:
+        contracts = [contract for contract in contracts if contract.get("subject_type") == subject_type]
+    if has_failure:
+        contracts = [contract for contract in contracts if has_failure in contract.get("failure_codes", [])]
+    if has_topology_policy:
+        contracts = [
+            contract
+            for contract in contracts
+            if has_topology_policy in contract.get("topology_policy_ids", [])
+        ]
+    summary = catalog.summary()
+    summary.update(
+        {
+            "filtered_contract_count": len(contracts),
+            "filters": {
+                "subject_type": subject_type,
+                "has_failure": has_failure,
+                "has_topology_policy": has_topology_policy,
+            },
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": catalog.kb_root,
+        "topology_policies": [policy.model_dump(mode="json") for policy in catalog.all_topology_policies()],
+        "tolerance_contracts": [
+            tolerance.model_dump(mode="json") for tolerance in catalog.all_tolerances()
+        ],
+        "failure_contracts": [
+            failure.model_dump(mode="json") for failure in catalog.all_failures()
+        ],
+        "contracts": contracts,
+        "notes": [
+            "Robustness contracts join native CAD descriptors, fixture behavior, interop formats, and selection-state contracts.",
+            "PlasticityMCP is evidence only; these records define Ghost Forge topology identity, tolerance, and failure behavior.",
+        ],
+    }
+
+
+def _cad_robustness_contract_payload(
+    contract_id: str,
+    kb_root: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_robustness_catalog
+
+    catalog = build_cad_robustness_catalog(kb_root)
+    contract = catalog.get_contract(contract_id)
+    tolerance_contracts = [
+        catalog.tolerance_contracts[tolerance_id].model_dump(mode="json")
+        for tolerance_id in contract.tolerance_contract_ids
+        if tolerance_id in catalog.tolerance_contracts
+    ]
+    failure_contracts = [
+        catalog.failure_contracts[code].model_dump(mode="json")
+        for code in contract.failure_codes
+        if code in catalog.failure_contracts
+    ]
+    topology_policies = [
+        catalog.topology_policies[policy_id].model_dump(mode="json")
+        for policy_id in contract.topology_policy_ids
+        if policy_id in catalog.topology_policies
+    ]
+    return {
+        **contract.model_dump(mode="json"),
+        "topology_policies": topology_policies,
+        "tolerance_contracts": tolerance_contracts,
+        "failure_contracts": failure_contracts,
+    }
+
+
+def _plasticity_recon_coverage_payload(
+    kb_root: str | None = None,
+    readiness_bucket: str | None = None,
+    priority: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import load_plasticity_recon_coverage
+
+    snapshot = load_plasticity_recon_coverage(kb_root)
+    commands = [row.model_dump(mode="json") for row in snapshot.commands]
+    if readiness_bucket:
+        commands = [row for row in commands if row.get("readiness_bucket") == readiness_bucket]
+    if priority:
+        commands = [row for row in commands if row.get("priority") == priority]
+    summary = snapshot.coverage_summary()
+    summary.update(
+        {
+            "filtered_command_count": len(commands),
+            "filters": {"readiness_bucket": readiness_bucket, "priority": priority},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": snapshot.kb_root,
+        "generated_utc": snapshot.generated_utc,
+        "source_files": snapshot.source_files,
+        "basis": snapshot.basis,
+        "readiness_summary": snapshot.summary,
+        "operating_sequence": list(snapshot.operating_sequence),
+        "format_families": list(snapshot.format_families),
+        "commands": commands,
+    }
+
+
+def _plasticity_recon_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import load_plasticity_recon_coverage
+
+    snapshot = load_plasticity_recon_coverage(kb_root)
+    try:
+        return snapshot.command(command_id).model_dump(mode="json")
+    except KeyError as exc:
+        known = [row.command_id for row in snapshot.commands]
+        raise KeyError(f"Unknown Plasticity recon command {command_id!r}. Known: {known}") from exc
+
+
+def _plasticity_observation_evidence_payload(
+    kb_root: str | None = None,
+    schema_status: str | None = None,
+    probe_kind: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import load_plasticity_observation_evidence
+
+    snapshot = load_plasticity_observation_evidence(kb_root)
+    commands = [row.model_dump(mode="json") for row in snapshot.commands]
+    templates = [row.model_dump(mode="json") for row in snapshot.templates]
+    if schema_status:
+        commands = [row for row in commands if row.get("schema_status") == schema_status]
+        templates = [row for row in templates if row.get("schema_status") == schema_status]
+    if probe_kind:
+        commands = [row for row in commands if row.get("probe_kind") == probe_kind]
+        templates = [row for row in templates if row.get("probe_kind") == probe_kind]
+    summary = snapshot.observation_summary()
+    summary.update(
+        {
+            "filtered_command_count": len(commands),
+            "filtered_template_count": len(templates),
+            "filters": {"schema_status": schema_status, "probe_kind": probe_kind},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": snapshot.kb_root,
+        "generated_utc": snapshot.generated_utc,
+        "source_files": snapshot.source_files,
+        "ledger_basis": snapshot.ledger_basis,
+        "template_basis": snapshot.template_basis,
+        "template_groups": {key: list(value) for key, value in snapshot.template_groups.items()},
+        "latest_session": snapshot.latest_session.model_dump(mode="json") if snapshot.latest_session else None,
+        "commands": commands,
+        "templates": templates,
+    }
+
+
+def _plasticity_observation_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import load_plasticity_observation_evidence
+
+    snapshot = load_plasticity_observation_evidence(kb_root)
+    status = snapshot.command_status(command_id).model_dump(mode="json")
+    try:
+        template = snapshot.command_template(command_id).model_dump(mode="json")
+    except KeyError:
+        template = None
+    return {"status": status, "template": template}
+
+
+def _plasticity_probe_packages_payload(
+    kb_root: str | None = None,
+    requires_file_evidence: bool | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import load_plasticity_probe_packages
+
+    snapshot = load_plasticity_probe_packages(kb_root)
+    packages = [row.model_dump(mode="json") for row in snapshot.packages]
+    if requires_file_evidence is not None:
+        packages = [
+            row
+            for row in packages
+            if any("file" in evidence for evidence in row.get("required_evidence", ())) is requires_file_evidence
+        ]
+    summary = snapshot.package_summary()
+    summary.update(
+        {
+            "filtered_package_count": len(packages),
+            "filters": {"requires_file_evidence": requires_file_evidence},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": snapshot.kb_root,
+        "generated_utc": snapshot.generated_utc,
+        "source_files": snapshot.source_files,
+        "basis": snapshot.basis,
+        "packages": packages,
+    }
+
+
+def _plasticity_probe_package_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import load_plasticity_probe_packages
+
+    snapshot = load_plasticity_probe_packages(kb_root)
+    return snapshot.package(command_id).model_dump(mode="json")
+
+
+def _cad_parity_report_payload(
+    kb_root: str | None = None,
+    recommended_action: str | None = None,
+    has_blocker: str | None = None,
+) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_parity_report
+
+    report = build_cad_parity_report(kb_root)
+    commands = [row.model_dump(mode="json") for row in report.commands]
+    if recommended_action:
+        commands = [row for row in commands if row.get("recommended_ghostforge_action") == recommended_action]
+    if has_blocker:
+        commands = [row for row in commands if has_blocker in row.get("blockers", [])]
+    summary = dict(report.summary)
+    summary.update(
+        {
+            "filtered_command_count": len(commands),
+            "filters": {"recommended_action": recommended_action, "has_blocker": has_blocker},
+        }
+    )
+    return {
+        "summary": summary,
+        "kb_root": report.kb_root,
+        "commands": commands,
+    }
+
+
+def _cad_parity_command_payload(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+    from ghostforge_core.cad import build_cad_parity_report
+
+    report = build_cad_parity_report(kb_root)
+    return report.command(command_id).model_dump(mode="json")
+
+
+def _cad_registry_summary(commands: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts: dict[str, int] = {}
+    family_counts: dict[str, int] = {}
+    for command in commands:
+        status = str(command.get("status") or "<missing>")
+        family = str(command.get("family") or "<missing>")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        family_counts[family] = family_counts.get(family, 0) + 1
+    return {
+        "command_count": len(commands),
+        "status_counts": dict(sorted(status_counts.items())),
+        "family_counts": dict(sorted(family_counts.items())),
+        "top_level_command_count": sum(1 for command in commands if command.get("is_top_level_command", True)),
+        "relationship_count": sum(
+            1
+            for command in commands
+            if command.get("alias_of") or command.get("option_of") or command.get("contextual_mode_of")
+        ),
+    }
+
+
+def _cad_fixture_summary(
+    fixtures: list[dict[str, Any]],
+    expectations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    geometry_kind_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    for fixture in fixtures:
+        geometry_kind = str(fixture.get("geometry_kind") or "<missing>")
+        geometry_kind_counts[geometry_kind] = geometry_kind_counts.get(geometry_kind, 0) + 1
+    for expectation in expectations:
+        status = str(expectation.get("verification_status") or "<missing>")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        "fixture_count": len(fixtures),
+        "expectation_count": len(expectations),
+        "geometry_kind_counts": dict(sorted(geometry_kind_counts.items())),
+        "verification_status_counts": dict(sorted(status_counts.items())),
+        "commands_with_expectations": sorted({str(row["command_id"]) for row in expectations}),
+    }
 
 
 def _operation_worker_status(capability: str | None) -> list[dict[str, Any]]:
@@ -279,6 +1569,7 @@ def _scene_object_graph_history_comparison(
             right_history_id,
         ),
         "comparison": comparison,
+        "followups": plan_graph_history_followup_actions(left, right),
     }
 
 
@@ -1826,6 +3117,1039 @@ def register_tools(server: FastMCP) -> None:
     def operation_descriptors_resource() -> dict[str, Any]:
         return {"operations": _operation_descriptors_payload()}
 
+    @server.tool(
+        description=(
+            "List Ghost Forge CAD command descriptors inspired by Plasticity recon. "
+            "Each descriptor exposes parameter schema, option panel schema, selection "
+            "contract, topology effects, tolerance policy, failure modes, undo, "
+            "fixtures, and Qt/MCP reachability."
+        )
+    )
+    def list_cad_commands(
+        family: str | None = None,
+        status: str | None = None,
+        include_relationships: bool = True,
+    ) -> dict[str, Any]:
+        commands = _cad_command_payloads()
+        if family:
+            commands = [command for command in commands if command.get("family") == family]
+        if status:
+            commands = [command for command in commands if command.get("status") == status]
+        if not include_relationships:
+            commands = [
+                command
+                for command in commands
+                if not (command.get("alias_of") or command.get("option_of") or command.get("contextual_mode_of"))
+            ]
+        return {
+            "summary": _cad_registry_summary(commands),
+            "commands": commands,
+            "notes": [
+                "CAD command descriptors are richer than authoring operations because modeling readiness requires parameters, selection, topology, tolerance, failure, undo, fixture, and automation contracts.",
+                "Relationship entries preserve Plasticity static-asset uncertainty as aliases, options, or contextual modes instead of claiming unproven standalone commands.",
+            ],
+        }
+
+    @server.tool(
+        description=(
+            "Inspect one Ghost Forge CAD command descriptor, including the "
+            "parameter/option schema and automation readiness gates."
+        )
+    )
+    def get_cad_command(command_id: str) -> dict[str, Any]:
+        return _cad_command_payload(command_id)
+
+    @server.tool(
+        description=(
+            "Run native Ghost Forge CAD preflight for a command descriptor. "
+            "This validates selection context, active object/plane requirements, "
+            "parameter values, relationship ownership, and implementation gates "
+            "without calling Plasticity."
+        )
+    )
+    def preflight_cad_command(
+        command_id: str,
+        selection_items: list[dict[str, Any]] | None = None,
+        active_object_id: str | None = None,
+        active_plane_id: str | None = None,
+        parameters: dict[str, Any] | None = None,
+        option_panel_state: dict[str, Any] | None = None,
+        preview_requested: bool = True,
+    ) -> dict[str, Any]:
+        return _cad_preflight_payload(
+            command_id,
+            selection_items,
+            active_object_id,
+            active_plane_id,
+            parameters,
+            option_panel_state,
+            preview_requested,
+        )
+
+    @server.tool(
+        description=(
+            "Validate an AI-authored Ghost Forge CAD operation graph without "
+            "executing geometry or mutating project state. Returns descriptor, "
+            "preflight, topology-reference, and replay-order diagnostics that "
+            "an agent can use to repair the graph."
+        )
+    )
+    def validate_cad_operation_graph(graph: dict[str, Any]) -> dict[str, Any]:
+        return _cad_operation_graph_validation_payload(graph)
+
+    @server.tool(
+        description=(
+            "Execute a validated Ghost Forge CAD operation graph through the "
+            "controlled native mesh-backed prototype. Writes an output mesh and "
+            "asset_manifest.json under `output_dir`; planned CAD-kernel nodes "
+            "remain blocked with diagnostics."
+        )
+    )
+    def execute_cad_operation_graph(
+        graph: dict[str, Any],
+        output_dir: str,
+        input_mesh_path: str | None = None,
+        output_format: str = "glb",
+        asset_id: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_operation_graph_execution_payload(
+            graph,
+            output_dir,
+            input_mesh_path,
+            output_format,
+            asset_id,
+        )
+
+    @server.resource(
+        "ghostforge://cad/commands",
+        name="cad_command_descriptors",
+        description="Ghost Forge CAD command descriptors derived from Plasticity recon and current mesh tools.",
+        mime_type="application/json",
+    )
+    def cad_command_descriptors_resource() -> dict[str, Any]:
+        commands = _cad_command_payloads()
+        return {"summary": _cad_registry_summary(commands), "commands": commands}
+
+    @server.resource(
+        "ghostforge://cad/commands/{command_id}",
+        name="cad_command_descriptor",
+        description="One Ghost Forge CAD command descriptor with parameter, selection, topology, tolerance, failure, undo, fixture, and automation contracts.",
+        mime_type="application/json",
+    )
+    def cad_command_descriptor_resource(command_id: str) -> dict[str, Any]:
+        return _cad_command_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/execution-contract",
+        name="cad_execution_contract",
+        description="Native Ghost Forge CAD command execution/preflight contract with no Plasticity runtime dependency.",
+        mime_type="application/json",
+    )
+    def cad_execution_contract_resource() -> dict[str, Any]:
+        return _cad_execution_contract_payload()
+
+    @server.resource(
+        "ghostforge://cad/operation-graph-contract",
+        name="cad_operation_graph_contract",
+        description="Native Ghost Forge CAD operation graph validation contract for AI/tool-authored construction graphs.",
+        mime_type="application/json",
+    )
+    def cad_operation_graph_contract_resource() -> dict[str, Any]:
+        return _cad_operation_graph_contract_payload()
+
+    @server.tool(
+        description=(
+            "List deterministic CAD fixture geometry used to verify command behavior. "
+            "Fixtures expose primitive recipes, named topology, selection sets, "
+            "tolerance notes, and the Plasticity-inspired modeling behaviors they test."
+        )
+    )
+    def list_cad_fixtures(geometry_kind: str | None = None) -> dict[str, Any]:
+        fixtures = _cad_fixture_payloads()
+        expectations = _cad_fixture_expectation_payloads()
+        if geometry_kind:
+            fixtures = [fixture for fixture in fixtures if fixture.get("geometry_kind") == geometry_kind]
+        return {
+            "summary": _cad_fixture_summary(fixtures, expectations),
+            "fixtures": fixtures,
+            "notes": [
+                "Fixture topology names are the contract surface for topology naming, selection rules, and regression probes.",
+                "Future live Plasticity automation should promote each planned expectation from contract_defined to observed_with_evidence.",
+            ],
+        }
+
+    @server.tool(
+        description="Inspect one CAD fixture, including named topology and reusable selection sets."
+    )
+    def get_cad_fixture(fixture_id: str) -> dict[str, Any]:
+        return _cad_fixture_payload(fixture_id)
+
+    @server.tool(
+        description=(
+            "List expected CAD command behavior on fixture geometry, including "
+            "parameters, topology deltas, known failures, and verification status."
+        )
+    )
+    def list_cad_command_fixture_expectations(command_id: str | None = None) -> dict[str, Any]:
+        fixtures = _cad_fixture_payloads()
+        expectations = _cad_fixture_expectation_payloads(command_id)
+        return {
+            "summary": _cad_fixture_summary(fixtures, expectations),
+            "expectations": expectations,
+        }
+
+    @server.tool(
+        description=(
+            "List native Ghost Forge CAD fixture behavior cases. These go deeper "
+            "than fixture expectations by defining selected topology, exact "
+            "parameters/options, preflight requirements, topology lineage, "
+            "failure probes, tolerances, and automation evidence."
+        )
+    )
+    def list_cad_behavior_cases(
+        command_id: str | None = None,
+        result_state: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_behavior_matrix_payload(command_id, result_state)
+
+    @server.tool(
+        description="Inspect one native Ghost Forge CAD fixture behavior case."
+    )
+    def get_cad_behavior_case(case_id: str) -> dict[str, Any]:
+        return _cad_behavior_case_payload(case_id)
+
+    @server.resource(
+        "ghostforge://cad/fixtures",
+        name="cad_fixtures",
+        description="Deterministic CAD fixtures with named topology and selection sets.",
+        mime_type="application/json",
+    )
+    def cad_fixtures_resource() -> dict[str, Any]:
+        fixtures = _cad_fixture_payloads()
+        expectations = _cad_fixture_expectation_payloads()
+        return {"summary": _cad_fixture_summary(fixtures, expectations), "fixtures": fixtures}
+
+    @server.resource(
+        "ghostforge://cad/fixtures/{fixture_id}",
+        name="cad_fixture",
+        description="One deterministic CAD fixture with named topology and reusable selections.",
+        mime_type="application/json",
+    )
+    def cad_fixture_resource(fixture_id: str) -> dict[str, Any]:
+        return _cad_fixture_payload(fixture_id)
+
+    @server.resource(
+        "ghostforge://cad/command-fixtures",
+        name="cad_command_fixture_expectations",
+        description="Expected command behavior on CAD fixtures, including topology deltas and failure cases.",
+        mime_type="application/json",
+    )
+    def cad_command_fixture_expectations_resource() -> dict[str, Any]:
+        fixtures = _cad_fixture_payloads()
+        expectations = _cad_fixture_expectation_payloads()
+        return {"summary": _cad_fixture_summary(fixtures, expectations), "expectations": expectations}
+
+    @server.resource(
+        "ghostforge://cad/behavior-cases",
+        name="cad_behavior_cases",
+        description="Native Ghost Forge CAD fixture behavior cases with topology lineage, failure probes, tolerances, and automation evidence.",
+        mime_type="application/json",
+    )
+    def cad_behavior_cases_resource() -> dict[str, Any]:
+        return _cad_behavior_matrix_payload()
+
+    @server.resource(
+        "ghostforge://cad/behavior-cases/{case_id}",
+        name="cad_behavior_case",
+        description="One native Ghost Forge CAD fixture behavior case.",
+        mime_type="application/json",
+    )
+    def cad_behavior_case_resource(case_id: str) -> dict[str, Any]:
+        return _cad_behavior_case_payload(case_id)
+
+    @server.tool(
+        description=(
+            "List the Plasticity-to-Ghost-Forge CAD probe matrix. The matrix "
+            "tracks the remaining evidence needed for parameter panels, option "
+            "panels, fixture behavior, selection rules, topology naming, failures, "
+            "tolerances, import/export settings, static assets, and automation routes."
+        )
+    )
+    def list_cad_probe_matrix() -> dict[str, Any]:
+        return _cad_probe_matrix_payload()
+
+    @server.tool(
+        description=(
+            "Inspect the probe plan for one CAD command, including Plasticity "
+            "automation route and Ghost Forge implementation implications."
+        )
+    )
+    def get_cad_command_probe_plan(command_id: str) -> dict[str, Any]:
+        return _cad_command_probe_plan_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/probe-matrix",
+        name="cad_probe_matrix",
+        description="Plasticity-to-Ghost-Forge CAD probe matrix for parity evidence collection.",
+        mime_type="application/json",
+    )
+    def cad_probe_matrix_resource() -> dict[str, Any]:
+        return _cad_probe_matrix_payload()
+
+    @server.resource(
+        "ghostforge://cad/probe-matrix/{command_id}",
+        name="cad_command_probe_plan",
+        description="One CAD command probe plan with automation route and evidence targets.",
+        mime_type="application/json",
+    )
+    def cad_command_probe_plan_resource(command_id: str) -> dict[str, Any]:
+        return _cad_command_probe_plan_payload(command_id)
+
+    @server.tool(
+        description=(
+            "List native Ghost Forge CAD logic patterns distilled from Plasticity "
+            "recon. This is Ghost Forge-owned design logic, not a runtime "
+            "dependency on Plasticity or PlasticityMCP."
+        )
+    )
+    def list_cad_logic_blueprint(command_id: str | None = None) -> dict[str, Any]:
+        return _cad_logic_blueprint_payload(command_id)
+
+    @server.tool(
+        description="Inspect one native Ghost Forge CAD logic pattern."
+    )
+    def get_cad_logic_pattern(pattern_id: str) -> dict[str, Any]:
+        return _cad_logic_pattern_payload(pattern_id)
+
+    @server.tool(
+        description=(
+            "List native Ghost Forge CAD import/export format contracts. "
+            "These expose format-specific option schemas, backend gates, "
+            "topology policies, tolerances, failures, fixture tests, and "
+            "workspace-safe automation requirements."
+        )
+    )
+    def list_cad_interop_formats(
+        direction: str | None = None,
+        family: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_interop_formats_payload(direction, family)
+
+    @server.tool(
+        description="Inspect one native Ghost Forge CAD import/export format contract."
+    )
+    def get_cad_interop_format(format_id: str) -> dict[str, Any]:
+        return _cad_interop_format_payload(format_id)
+
+    @server.tool(
+        description=(
+            "List Ghost Forge CAD development tasks generated from PlasticityMCP "
+            "recon artifacts. The queue joins command index rows, inferred "
+            "parameter templates, observation status, probe packages, automation "
+            "routes, file-safety gates, and static-asset mapping blockers."
+        )
+    )
+    def list_cad_development_queue(
+        kb_root: str | None = None,
+        implementation_track: str | None = None,
+        has_blocker: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_development_queue_payload(kb_root, implementation_track, has_blocker)
+
+    @server.tool(
+        description="Inspect one Ghost Forge CAD development task derived from Plasticity recon evidence."
+    )
+    def get_cad_development_task(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_development_task_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List declarative Ghost Forge CAD automation routes derived from the "
+            "development queue. Each route exposes safety gates, live-execution "
+            "eligibility, required evidence, reset verification, workspace write "
+            "scope, and native Ghost Forge consumer."
+        )
+    )
+    def list_cad_automation_runbook(
+        kb_root: str | None = None,
+        route_kind: str | None = None,
+        missing_gate: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_automation_runbook_payload(kb_root, route_kind, missing_gate)
+
+    @server.tool(
+        description="Inspect one Ghost Forge CAD automation route by command id."
+    )
+    def get_cad_automation_route(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_automation_route_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List Ghost Forge CAD schema drafts generated from PlasticityMCP "
+            "parameter templates. Drafts expose parameter candidates, option-panel "
+            "groups, UI control hints, validation rules, and promotion blockers."
+        )
+    )
+    def list_cad_schema_drafts(
+        kb_root: str | None = None,
+        implementation_track: str | None = None,
+        has_blocker: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_schema_drafts_payload(kb_root, implementation_track, has_blocker)
+
+    @server.tool(
+        description="Inspect one Ghost Forge CAD schema draft and descriptor-ready ParameterSpec candidates."
+    )
+    def get_cad_schema_draft(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_schema_draft_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List CAD schema promotion candidates. This separates inferred "
+            "Plasticity templates from observed parameter/option-panel evidence "
+            "and reports exactly which gates block promotion into native Ghost "
+            "Forge descriptors."
+        )
+    )
+    def list_cad_schema_promotions(
+        kb_root: str | None = None,
+        promotion_status: str | None = None,
+        has_blocker: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_schema_promotion_payload(kb_root, promotion_status, has_blocker)
+
+    @server.tool(
+        description="Inspect one CAD schema promotion candidate and descriptor-ready observed ParameterSpec entries."
+    )
+    def get_cad_schema_promotion(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_schema_promotion_candidate_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List CAD evidence packet plans for live Plasticity probes. Each "
+            "packet defines the required parameter, option-panel, fixture, "
+            "topology, failure/tolerance, file-artifact, static-owner, and reset "
+            "evidence needed before Ghost Forge can promote or implement behavior."
+        )
+    )
+    def list_cad_evidence_packets(
+        kb_root: str | None = None,
+        packet_kind: str | None = None,
+        readiness: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_evidence_packets_payload(kb_root, packet_kind, readiness)
+
+    @server.tool(
+        description="Inspect one CAD evidence packet plan by command id."
+    )
+    def get_cad_evidence_packet(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_evidence_packet_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List CAD live-probe batches. Batches order evidence packets into "
+            "ready capture, probe-package generation, static-owner resolution, "
+            "safety-gate repair, and post-capture promotion work."
+        )
+    )
+    def list_cad_probe_batches(
+        kb_root: str | None = None,
+        batch_kind: str | None = None,
+        packet_kind: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_probe_batches_payload(kb_root, batch_kind, packet_kind)
+
+    @server.tool(
+        description="Inspect one CAD live-probe batch by id, for example ready_live_capture:file_interop_packet."
+    )
+    def get_cad_probe_batch(batch_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_probe_batch_payload(batch_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List concrete CAD live-probe session plans. Sessions expand a "
+            "batch/evidence packet into ordered guarded steps for baseline, "
+            "command panel, behavior/artifact capture, reset, and observation recording."
+        )
+    )
+    def list_cad_live_probe_sessions(
+        kb_root: str | None = None,
+        session_mode: str | None = None,
+        packet_kind: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_live_probe_sessions_payload(kb_root, session_mode, packet_kind)
+
+    @server.tool(
+        description="Inspect one concrete CAD live-probe session by command id."
+    )
+    def get_cad_live_probe_session(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_live_probe_session_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List CAD live-observation record templates. These are the receiving "
+            "records that completed Plasticity captures must fill before Ghost "
+            "Forge can promote schemas, behavior, interop, or static-owner evidence."
+        )
+    )
+    def list_cad_observation_templates(
+        kb_root: str | None = None,
+        session_mode: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_observation_templates_payload(kb_root, session_mode)
+
+    @server.tool(
+        description="Inspect one empty CAD observation record template by command id."
+    )
+    def get_cad_observation_template(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_observation_template_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "Validate a completed CAD live-observation record against the current "
+            "session/evidence packet. Reports exactly whether the capture can feed "
+            "schema promotion, fixture behavior parity, interop contracts, or "
+            "static-owner classification."
+        )
+    )
+    def validate_cad_observation_record(
+        observation_record: dict[str, Any],
+        kb_root: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_observation_validation_payload(observation_record, kb_root)
+
+    @server.tool(
+        description=(
+            "List validated CAD observation ledger entries loaded from the "
+            "knowledge base. These are completed Plasticity captures that have "
+            "been checked against Ghost Forge evidence/session contracts."
+        )
+    )
+    def list_cad_observation_ledger(
+        kb_root: str | None = None,
+        status: str | None = None,
+        promotion_target: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_observation_ledger_payload(kb_root, status, promotion_target)
+
+    @server.tool(
+        description="Inspect validated CAD observation ledger entries for one command id."
+    )
+    def get_cad_observation_ledger_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_observation_ledger_command_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List native Ghost Forge CAD implementation handoffs generated from "
+            "validated observation-ledger entries. Handoffs translate accepted "
+            "Plasticity evidence into descriptor, Qt/MCP schema, handler-test, "
+            "interop, robustness, or static-owner work."
+        )
+    )
+    def list_cad_native_handoffs(
+        kb_root: str | None = None,
+        handoff_status: str | None = None,
+        target: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_native_handoffs_payload(kb_root, handoff_status, target)
+
+    @server.tool(
+        description="Inspect native Ghost Forge CAD implementation handoffs for one command id."
+    )
+    def get_cad_native_handoff_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_native_handoff_command_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List CAD capture campaign items. Campaigns join live-probe sessions, "
+            "observation ledger state, and native handoffs to tell the next recon "
+            "pass what to capture, recapture, unblock, or apply in Ghost Forge."
+        )
+    )
+    def list_cad_capture_campaign(
+        kb_root: str | None = None,
+        status: str | None = None,
+        packet_kind: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_capture_campaign_payload(kb_root, status, packet_kind)
+
+    @server.tool(
+        description="Inspect one CAD capture campaign item by command id."
+    )
+    def get_cad_capture_campaign_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_capture_campaign_command_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List native Ghost Forge CAD selection-state contracts. Returns "
+            "selection modes, topology id policies, state-transition contracts, "
+            "failure modes, and automation evidence for selection/snapping commands."
+        )
+    )
+    def list_cad_selection_contracts(
+        kb_root: str | None = None,
+        operation_kind: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_selection_contracts_payload(kb_root, operation_kind)
+
+    @server.tool(
+        description="Inspect one native Ghost Forge CAD selection-state command contract."
+    )
+    def get_cad_selection_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_selection_command_payload(command_id, kb_root)
+
+    @server.tool(
+        description=(
+            "List native Ghost Forge CAD robustness contracts. These join command "
+            "descriptors, fixture behavior, file interop, and selection state into "
+            "topology naming policies, lineage requirements, tolerance contracts, "
+            "failure contracts, and promotion blockers."
+        )
+    )
+    def list_cad_robustness_contracts(
+        kb_root: str | None = None,
+        subject_type: str | None = None,
+        has_failure: str | None = None,
+        has_topology_policy: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_robustness_contracts_payload(
+            kb_root,
+            subject_type,
+            has_failure,
+            has_topology_policy,
+        )
+
+    @server.tool(
+        description="Inspect one native Ghost Forge CAD robustness contract by contract id or subject id."
+    )
+    def get_cad_robustness_contract(contract_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_robustness_contract_payload(contract_id, kb_root)
+
+    @server.resource(
+        "ghostforge://cad/logic-blueprint",
+        name="cad_logic_blueprint",
+        description="Native Ghost Forge CAD logic blueprint distilled from recon evidence.",
+        mime_type="application/json",
+    )
+    def cad_logic_blueprint_resource() -> dict[str, Any]:
+        return _cad_logic_blueprint_payload()
+
+    @server.resource(
+        "ghostforge://cad/logic-blueprint/{pattern_id}",
+        name="cad_logic_pattern",
+        description="One native Ghost Forge CAD logic pattern.",
+        mime_type="application/json",
+    )
+    def cad_logic_pattern_resource(pattern_id: str) -> dict[str, Any]:
+        return _cad_logic_pattern_payload(pattern_id)
+
+    @server.resource(
+        "ghostforge://cad/interop-formats",
+        name="cad_interop_formats",
+        description="Native Ghost Forge CAD import/export format contracts with option schemas and verification gates.",
+        mime_type="application/json",
+    )
+    def cad_interop_formats_resource() -> dict[str, Any]:
+        return _cad_interop_formats_payload()
+
+    @server.resource(
+        "ghostforge://cad/interop-formats/{format_id}",
+        name="cad_interop_format",
+        description="One native Ghost Forge CAD import/export format contract.",
+        mime_type="application/json",
+    )
+    def cad_interop_format_resource(format_id: str) -> dict[str, Any]:
+        return _cad_interop_format_payload(format_id)
+
+    @server.resource(
+        "ghostforge://cad/development-queue",
+        name="cad_development_queue",
+        description="Ghost Forge CAD implementation queue derived from Plasticity recon evidence.",
+        mime_type="application/json",
+    )
+    def cad_development_queue_resource() -> dict[str, Any]:
+        return _cad_development_queue_payload()
+
+    @server.resource(
+        "ghostforge://cad/development-queue/{command_id}",
+        name="cad_development_task",
+        description="One Ghost Forge CAD implementation task derived from Plasticity recon evidence.",
+        mime_type="application/json",
+    )
+    def cad_development_task_resource(command_id: str) -> dict[str, Any]:
+        return _cad_development_task_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/automation-runbook",
+        name="cad_automation_runbook",
+        description="Declarative Ghost Forge CAD automation routes with safety gates and evidence requirements.",
+        mime_type="application/json",
+    )
+    def cad_automation_runbook_resource() -> dict[str, Any]:
+        return _cad_automation_runbook_payload()
+
+    @server.resource(
+        "ghostforge://cad/automation-runbook/{command_id}",
+        name="cad_automation_route",
+        description="One declarative Ghost Forge CAD automation route.",
+        mime_type="application/json",
+    )
+    def cad_automation_route_resource(command_id: str) -> dict[str, Any]:
+        return _cad_automation_route_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/schema-drafts",
+        name="cad_schema_drafts",
+        description="Ghost Forge CAD schema drafts derived from PlasticityMCP parameter templates.",
+        mime_type="application/json",
+    )
+    def cad_schema_drafts_resource() -> dict[str, Any]:
+        return _cad_schema_drafts_payload()
+
+    @server.resource(
+        "ghostforge://cad/schema-drafts/{command_id}",
+        name="cad_schema_draft",
+        description="One Ghost Forge CAD schema draft with parameter and option-panel candidates.",
+        mime_type="application/json",
+    )
+    def cad_schema_draft_resource(command_id: str) -> dict[str, Any]:
+        return _cad_schema_draft_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/schema-promotions",
+        name="cad_schema_promotions",
+        description="CAD schema promotion candidates with observed-evidence gates and blockers.",
+        mime_type="application/json",
+    )
+    def cad_schema_promotions_resource() -> dict[str, Any]:
+        return _cad_schema_promotion_payload()
+
+    @server.resource(
+        "ghostforge://cad/schema-promotions/{command_id}",
+        name="cad_schema_promotion",
+        description="One CAD schema promotion candidate with gates, blockers, and observed ParameterSpec entries.",
+        mime_type="application/json",
+    )
+    def cad_schema_promotion_resource(command_id: str) -> dict[str, Any]:
+        return _cad_schema_promotion_candidate_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/evidence-packets",
+        name="cad_evidence_packets",
+        description="CAD live-probe evidence packet plans for schema, behavior, topology, file, and reset capture.",
+        mime_type="application/json",
+    )
+    def cad_evidence_packets_resource() -> dict[str, Any]:
+        return _cad_evidence_packets_payload()
+
+    @server.resource(
+        "ghostforge://cad/evidence-packets/{command_id}",
+        name="cad_evidence_packet",
+        description="One CAD evidence packet plan for a live Plasticity probe.",
+        mime_type="application/json",
+    )
+    def cad_evidence_packet_resource(command_id: str) -> dict[str, Any]:
+        return _cad_evidence_packet_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/probe-batches",
+        name="cad_probe_batches",
+        description="Ordered CAD live-probe batches derived from evidence packet readiness.",
+        mime_type="application/json",
+    )
+    def cad_probe_batches_resource() -> dict[str, Any]:
+        return _cad_probe_batches_payload()
+
+    @server.resource(
+        "ghostforge://cad/probe-batches/{batch_id}",
+        name="cad_probe_batch",
+        description="One ordered CAD live-probe batch.",
+        mime_type="application/json",
+    )
+    def cad_probe_batch_resource(batch_id: str) -> dict[str, Any]:
+        return _cad_probe_batch_payload(batch_id)
+
+    @server.resource(
+        "ghostforge://cad/live-probe-sessions",
+        name="cad_live_probe_sessions",
+        description="Concrete plan-only CAD live-probe sessions derived from probe batches and evidence packets.",
+        mime_type="application/json",
+    )
+    def cad_live_probe_sessions_resource() -> dict[str, Any]:
+        return _cad_live_probe_sessions_payload()
+
+    @server.resource(
+        "ghostforge://cad/live-probe-sessions/{command_id}",
+        name="cad_live_probe_session",
+        description="One concrete CAD live-probe session plan.",
+        mime_type="application/json",
+    )
+    def cad_live_probe_session_resource(command_id: str) -> dict[str, Any]:
+        return _cad_live_probe_session_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/observation-templates",
+        name="cad_observation_templates",
+        description="Empty CAD live-observation records for validated Plasticity evidence capture.",
+        mime_type="application/json",
+    )
+    def cad_observation_templates_resource() -> dict[str, Any]:
+        return _cad_observation_templates_payload()
+
+    @server.resource(
+        "ghostforge://cad/observation-templates/{command_id}",
+        name="cad_observation_template",
+        description="One empty CAD live-observation record template.",
+        mime_type="application/json",
+    )
+    def cad_observation_template_resource(command_id: str) -> dict[str, Any]:
+        return _cad_observation_template_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/observation-ledger",
+        name="cad_observation_ledger",
+        description="Validated CAD live-observation ledger loaded from knowledge-base capture records.",
+        mime_type="application/json",
+    )
+    def cad_observation_ledger_resource() -> dict[str, Any]:
+        return _cad_observation_ledger_payload()
+
+    @server.resource(
+        "ghostforge://cad/observation-ledger/{command_id}",
+        name="cad_observation_ledger_command",
+        description="Validated CAD live-observation ledger entries for one command.",
+        mime_type="application/json",
+    )
+    def cad_observation_ledger_command_resource(command_id: str) -> dict[str, Any]:
+        return _cad_observation_ledger_command_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/native-handoffs",
+        name="cad_native_handoffs",
+        description="Native Ghost Forge CAD implementation handoffs from validated observation evidence.",
+        mime_type="application/json",
+    )
+    def cad_native_handoffs_resource() -> dict[str, Any]:
+        return _cad_native_handoffs_payload()
+
+    @server.resource(
+        "ghostforge://cad/native-handoffs/{command_id}",
+        name="cad_native_handoff_command",
+        description="Native Ghost Forge CAD implementation handoffs for one command.",
+        mime_type="application/json",
+    )
+    def cad_native_handoff_command_resource(command_id: str) -> dict[str, Any]:
+        return _cad_native_handoff_command_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/capture-campaign",
+        name="cad_capture_campaign",
+        description="Plasticity recon capture campaign joined with ledger and Ghost Forge handoff readiness.",
+        mime_type="application/json",
+    )
+    def cad_capture_campaign_resource() -> dict[str, Any]:
+        return _cad_capture_campaign_payload()
+
+    @server.resource(
+        "ghostforge://cad/capture-campaign/{command_id}",
+        name="cad_capture_campaign_command",
+        description="One Plasticity recon capture campaign item.",
+        mime_type="application/json",
+    )
+    def cad_capture_campaign_command_resource(command_id: str) -> dict[str, Any]:
+        return _cad_capture_campaign_command_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/selection-contracts",
+        name="cad_selection_contracts",
+        description="Native Ghost Forge CAD selection modes and command state-transition contracts.",
+        mime_type="application/json",
+    )
+    def cad_selection_contracts_resource() -> dict[str, Any]:
+        return _cad_selection_contracts_payload()
+
+    @server.resource(
+        "ghostforge://cad/selection-contracts/{command_id}",
+        name="cad_selection_command",
+        description="One native Ghost Forge CAD selection-state command contract.",
+        mime_type="application/json",
+    )
+    def cad_selection_command_resource(command_id: str) -> dict[str, Any]:
+        return _cad_selection_command_payload(command_id)
+
+    @server.resource(
+        "ghostforge://cad/robustness-contracts",
+        name="cad_robustness_contracts",
+        description="Native Ghost Forge CAD topology, tolerance, failure, and lineage contracts.",
+        mime_type="application/json",
+    )
+    def cad_robustness_contracts_resource() -> dict[str, Any]:
+        return _cad_robustness_contracts_payload()
+
+    @server.resource(
+        "ghostforge://cad/robustness-contracts/{contract_id}",
+        name="cad_robustness_contract",
+        description="One native Ghost Forge CAD robustness contract with expanded policies, tolerances, and failures.",
+        mime_type="application/json",
+    )
+    def cad_robustness_contract_resource(contract_id: str) -> dict[str, Any]:
+        return _cad_robustness_contract_payload(contract_id)
+
+    @server.tool(
+        description=(
+            "Load current PlasticityMCP recon coverage from generated knowledge-base "
+            "artifacts. This exposes every command readiness row, automation route, "
+            "parameter-observation gap, static mapping status, and file-format family "
+            "that the Plasticity recon has recorded."
+        )
+    )
+    def list_plasticity_recon_coverage(
+        kb_root: str | None = None,
+        readiness_bucket: str | None = None,
+        priority: str | None = None,
+    ) -> dict[str, Any]:
+        return _plasticity_recon_coverage_payload(kb_root, readiness_bucket, priority)
+
+    @server.tool(
+        description="Inspect one command row from the current PlasticityMCP recon coverage."
+    )
+    def get_plasticity_recon_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _plasticity_recon_command_payload(command_id, kb_root)
+
+    @server.resource(
+        "ghostforge://cad/plasticity-recon-coverage",
+        name="plasticity_recon_coverage",
+        description="Current PlasticityMCP command readiness and automation-route coverage loaded from recon artifacts.",
+        mime_type="application/json",
+    )
+    def plasticity_recon_coverage_resource() -> dict[str, Any]:
+        return _plasticity_recon_coverage_payload()
+
+    @server.resource(
+        "ghostforge://cad/plasticity-recon-coverage/{command_id}",
+        name="plasticity_recon_command",
+        description="One PlasticityMCP command readiness row with parameter gaps and automation route.",
+        mime_type="application/json",
+    )
+    def plasticity_recon_command_resource(command_id: str) -> dict[str, Any]:
+        return _plasticity_recon_command_payload(command_id)
+
+    @server.tool(
+        description=(
+            "Load PlasticityMCP parameter observation evidence, separating inferred "
+            "templates, ledger status, latest probe-session requirements, observed "
+            "schema counts, evidence screenshots, and reset verification."
+        )
+    )
+    def list_plasticity_observation_evidence(
+        kb_root: str | None = None,
+        schema_status: str | None = None,
+        probe_kind: str | None = None,
+    ) -> dict[str, Any]:
+        return _plasticity_observation_evidence_payload(kb_root, schema_status, probe_kind)
+
+    @server.tool(
+        description=(
+            "Inspect one Plasticity command's parameter-observation ledger status "
+            "and inferred command template."
+        )
+    )
+    def get_plasticity_observation_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _plasticity_observation_command_payload(command_id, kb_root)
+
+    @server.resource(
+        "ghostforge://cad/plasticity-observation-evidence",
+        name="plasticity_observation_evidence",
+        description="PlasticityMCP parameter observation ledger and inferred schema templates.",
+        mime_type="application/json",
+    )
+    def plasticity_observation_evidence_resource() -> dict[str, Any]:
+        return _plasticity_observation_evidence_payload()
+
+    @server.resource(
+        "ghostforge://cad/plasticity-observation-evidence/{command_id}",
+        name="plasticity_observation_command",
+        description="One Plasticity command's observation status and inferred parameter template.",
+        mime_type="application/json",
+    )
+    def plasticity_observation_command_resource(command_id: str) -> dict[str, Any]:
+        return _plasticity_observation_command_payload(command_id)
+
+    @server.tool(
+        description=(
+            "Load PlasticityMCP ready-to-run parameter probe packages. Packages "
+            "are the executable evidence units for live probing: fixture setup, "
+            "required screenshots, validation checks, reset steps, and observation slots."
+        )
+    )
+    def list_plasticity_probe_packages(
+        kb_root: str | None = None,
+        requires_file_evidence: bool | None = None,
+    ) -> dict[str, Any]:
+        return _plasticity_probe_packages_payload(kb_root, requires_file_evidence)
+
+    @server.tool(
+        description="Inspect one PlasticityMCP parameter probe package by command id."
+    )
+    def get_plasticity_probe_package(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _plasticity_probe_package_payload(command_id, kb_root)
+
+    @server.resource(
+        "ghostforge://cad/plasticity-probe-packages",
+        name="plasticity_probe_packages",
+        description="PlasticityMCP ready-to-run parameter probe packages.",
+        mime_type="application/json",
+    )
+    def plasticity_probe_packages_resource() -> dict[str, Any]:
+        return _plasticity_probe_packages_payload()
+
+    @server.resource(
+        "ghostforge://cad/plasticity-probe-packages/{command_id}",
+        name="plasticity_probe_package",
+        description="One PlasticityMCP parameter probe package.",
+        mime_type="application/json",
+    )
+    def plasticity_probe_package_resource(command_id: str) -> dict[str, Any]:
+        return _plasticity_probe_package_payload(command_id)
+
+    @server.tool(
+        description=(
+            "Join Ghost Forge CAD descriptors, fixture expectations, probe plans, "
+            "Plasticity readiness rows, and observation evidence into one parity "
+            "readiness report with blockers and recommended next actions."
+        )
+    )
+    def list_cad_parity_report(
+        kb_root: str | None = None,
+        recommended_action: str | None = None,
+        has_blocker: str | None = None,
+    ) -> dict[str, Any]:
+        return _cad_parity_report_payload(kb_root, recommended_action, has_blocker)
+
+    @server.tool(
+        description="Inspect one joined Ghost Forge / Plasticity CAD parity readiness row."
+    )
+    def get_cad_parity_command(command_id: str, kb_root: str | None = None) -> dict[str, Any]:
+        return _cad_parity_command_payload(command_id, kb_root)
+
+    @server.resource(
+        "ghostforge://cad/parity-report",
+        name="cad_parity_report",
+        description="Joined CAD parity readiness report with blockers and next actions.",
+        mime_type="application/json",
+    )
+    def cad_parity_report_resource() -> dict[str, Any]:
+        return _cad_parity_report_payload()
+
+    @server.resource(
+        "ghostforge://cad/parity-report/{command_id}",
+        name="cad_parity_command",
+        description="One joined CAD parity readiness row.",
+        mime_type="application/json",
+    )
+    def cad_parity_command_resource(command_id: str) -> dict[str, Any]:
+        return _cad_parity_command_payload(command_id)
+
     # ------------------------------------------------------------------
     # Workflow prompts
     # ------------------------------------------------------------------
@@ -2069,6 +4393,40 @@ def register_tools(server: FastMCP) -> None:
             left_history_id,
             right_history_id,
         )
+
+    @server.tool(
+        description=(
+            "Plan follow-up actions from two saved graph-history rows. "
+            "Returns append_graph_node repair suggestions for retarget deltas "
+            "and submit_audit task suggestions for validation regressions."
+        )
+    )
+    def plan_scene_graph_history_followups(
+        scene_id: str,
+        object_id: str,
+        left_history_id: str,
+        right_history_id: str,
+        base_name: str | None = None,
+    ) -> dict[str, Any]:
+        left = _scene_object_graph_history_item(scene_id, object_id, left_history_id)
+        right = _scene_object_graph_history_item(scene_id, object_id, right_history_id)
+        return {
+            "scene_id": scene_id_for_path(scene_id),
+            "object_id": object_id,
+            "left_history_id": left_history_id,
+            "right_history_id": right_history_id,
+            "resource_uri": graph_history_comparison_resource_uri(
+                scene_id,
+                object_id,
+                left_history_id,
+                right_history_id,
+            ),
+            "followups": plan_graph_history_followup_actions(
+                left,
+                right,
+                base_name=base_name,
+            ),
+        }
 
     @server.tool(description="Delete an edit graph and its evaluation report.")
     def delete_edit_graph(graph_id: str) -> dict[str, Any]:

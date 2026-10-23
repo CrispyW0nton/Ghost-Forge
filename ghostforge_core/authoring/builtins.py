@@ -80,6 +80,36 @@ def _copy_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 
 
 # ---------------------------------------------------------------------------
+# Source primitive operations
+# ---------------------------------------------------------------------------
+
+
+def _op_create_box(ctx: OperationContext) -> trimesh.Trimesh:
+    extents = ctx.params.get("extents", [1.0, 1.0, 1.0])
+    if not isinstance(extents, (list, tuple)) or len(extents) != 3:
+        raise OperationError(f"'extents' must be a 3-vector; got {extents!r}")
+    try:
+        extents_vec = [float(value) for value in extents]
+    except (TypeError, ValueError) as exc:
+        raise OperationError(f"'extents' contains non-numeric entries: {extents!r}") from exc
+    if any(value <= 0.0 for value in extents_vec):
+        raise OperationError("all extents must be > 0")
+
+    center = ctx.params.get("center", [0.0, 0.0, 0.0])
+    if not isinstance(center, (list, tuple)) or len(center) != 3:
+        raise OperationError(f"'center' must be a 3-vector; got {center!r}")
+    try:
+        center_vec = [float(value) for value in center]
+    except (TypeError, ValueError) as exc:
+        raise OperationError(f"'center' contains non-numeric entries: {center!r}") from exc
+
+    mesh = trimesh.creation.box(extents=extents_vec)
+    if any(value != 0.0 for value in center_vec):
+        mesh.apply_translation(np.array(center_vec, dtype=float))
+    return mesh
+
+
+# ---------------------------------------------------------------------------
 # Geometry transform operations
 # ---------------------------------------------------------------------------
 
@@ -285,6 +315,28 @@ def _op_apply_material(ctx: OperationContext) -> trimesh.Trimesh:
 
 
 DEFAULT_OPERATIONS: tuple[Operation, ...] = (
+    make_operation(
+        kind="create_box",
+        label="Create Box",
+        summary="Source primitive: create a box mesh from extents and center.",
+        category="source.primitive",
+        params_schema={
+            "extents": {"type": "vec3", "default": [1.0, 1.0, 1.0], "min": 1e-6},
+            "center": {"type": "vec3", "default": [0.0, 0.0, 0.0]},
+        },
+        parameter_presets=(
+            {
+                "label": "Unit Cube",
+                "values": {"extents": [1.0, 1.0, 1.0], "center": [0.0, 0.0, 0.0]},
+                "default": True,
+            },
+            {
+                "label": "Wide Prop Blockout",
+                "values": {"extents": [2.0, 0.75, 1.0], "center": [0.0, 0.375, 0.0]},
+            },
+        ),
+        handler=_op_create_box,
+    ),
     make_operation(
         kind="transform",
         label="Transform",

@@ -1,0 +1,72 @@
+{
+  "layout_id": "generation_wide",
+  "name": "Generation Wide",
+  "module_id": "generation",
+  "version": "1.0",
+  "preset": true,
+  "main_width": 1760,
+  "main_height": 1020,
+  "viewport": {
+    "min_width": 820,
+    "preferred_width": 1120,
+    "toolbar_visible": true,
+    "bottom_strip_visible": true
+  },
+  "toolbar": {
+    "main_visible": true,
+    "workspace_visible": true,
+    "workspace_button_mode": "textBesideIcon",
+    "workspace_icon_size": 20
+  },
+  "panels": {
+    "workspace": {"visible": false},
+    "viewport": {"visible": false},
+    "scene": {"visible": false},
+    "content": {"visible": true, "area": "left", "preferred_width": 360},
+    "modeling": {"visible": false},
+    "graph": {"visible": true, "area": "right", "preferred_width": 460},
+    "workers": {"visible": true, "area": "left", "preferred_width": 380},
+    "jobs": {"visible": true, "area": "bottom", "preferred_height": 210},
+    "properties": {"visible": true, "area": "right", "preferred_width": 360},
+    "audit": {"visible": true, "area": "right", "preferred_width": 360},
+    "theme": {"visible": false}
+  },
+  "dock_groups": [
+    {
+      "group_id": "generation_wide_left",
+      "area": "left",
+      "mode": "vertical",
+      "active": "content",
+      "docks": ["content", "workers"]
+    },
+    {
+      "group_id": "generation_wide_right",
+      "area": "right",
+      "mode": "vertical",
+      "active": "graph",
+      "docks": ["graph", "properties", "audit"]
+    },
+    {
+      "group_id": "generation_wide_bottom",
+      "area": "bottom",
+      "mode": "tabbed",
+      "active": "jobs",
+      "docks": ["jobs"]
+    }
+  ],
+  "spacing": {
+    "margin": 8,
+    "panelSpacing": 8,
+    "toolbarSpacing": 6,
+    "inputHeight": 28,
+    "tableRowHeight": 25,
+    "treeRowHeight": 25,
+    "tabHeight": 20,
+    "tabPaddingX": 12,
+    "tabPaddingY": 6,
+    "groupboxMargin": 12,
+    "groupboxSpacing": 8,
+    "bottomStripHeight": 34,
+    "splitterHandleWidth": 7
+  }
+}

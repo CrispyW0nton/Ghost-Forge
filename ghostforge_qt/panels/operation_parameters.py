@@ -30,8 +30,12 @@ class PathParameterWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.mode = mode
         self.file_filter = file_filter
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         self.line_edit = QtWidgets.QLineEdit()
+        self.line_edit.setMinimumWidth(140)
         self.browse_button = QtWidgets.QPushButton("Browse")
+        self.browse_button.setMinimumWidth(72)
+        self.browse_button.setMaximumWidth(88)
         self.browse_button.clicked.connect(self.browse)
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -66,8 +70,14 @@ class OperationParameterForm(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum)
         self._form = QtWidgets.QFormLayout(self)
         self._form.setContentsMargins(0, 0, 0, 0)
+        self._form.setSpacing(6)
+        self._form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self._form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
+        self._form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._form.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
         self._operation: OperationRow | None = None
         self._widgets: dict[str, QtWidgets.QWidget] = {}
         self._schema: dict[str, dict[str, Any]] = {}
@@ -206,7 +216,9 @@ class OperationParameterForm(QtWidgets.QWidget):
             return check
         if typ == "object":
             edit = QtWidgets.QPlainTextEdit()
-            edit.setMaximumHeight(72)
+            edit.setMinimumHeight(68)
+            edit.setMaximumHeight(96)
+            edit.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
             _write_widget(edit, spec, value)
             return edit
         path_mode = _path_mode(key, spec)
@@ -218,10 +230,13 @@ class OperationParameterForm(QtWidgets.QWidget):
             picker.line_edit.setPlaceholderText(
                 "Folder path" if path_mode == "directory" else "File path"
             )
+            picker.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
             _write_widget(picker, spec, value)
             return picker
 
         edit = QtWidgets.QLineEdit()
+        edit.setMinimumWidth(160)
+        edit.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         if typ in {"int", "float"}:
             edit.setPlaceholderText(_number_hint(spec))
         elif typ in {"vec3", "vec4"}:

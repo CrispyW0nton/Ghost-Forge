@@ -53,6 +53,9 @@ class ContentBrowserPanel(QtWidgets.QWidget):
         for col in (1, 2, 3):
             self.tree.hideColumn(col)
 
+    def refresh(self) -> None:
+        self._set_project_root(self.project.root)
+
     @QtCore.Slot()
     def open_project_dialog(self) -> None:
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open Ghost Forge Project", str(self.project.root))

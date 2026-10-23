@@ -1,0 +1,72 @@
+{
+  "layout_id": "modeling_compact",
+  "name": "Modeling Compact",
+  "module_id": "modeling",
+  "version": "1.0",
+  "preset": true,
+  "main_width": 1440,
+  "main_height": 900,
+  "viewport": {
+    "min_width": 720,
+    "preferred_width": 980,
+    "toolbar_visible": true,
+    "bottom_strip_visible": true
+  },
+  "toolbar": {
+    "main_visible": true,
+    "workspace_visible": true,
+    "workspace_button_mode": "iconOnly",
+    "workspace_icon_size": 16
+  },
+  "panels": {
+    "workspace": {"visible": false},
+    "viewport": {"visible": false},
+    "scene": {"visible": true, "area": "left", "preferred_width": 300},
+    "content": {"visible": true, "area": "left", "preferred_width": 320},
+    "modeling": {"visible": true, "area": "right", "preferred_width": 330},
+    "graph": {"visible": true, "area": "right", "preferred_width": 380},
+    "workers": {"visible": false},
+    "jobs": {"visible": true, "area": "bottom", "preferred_height": 150},
+    "properties": {"visible": true, "area": "right", "preferred_width": 320},
+    "audit": {"visible": false},
+    "theme": {"visible": false}
+  },
+  "dock_groups": [
+    {
+      "group_id": "modeling_compact_left",
+      "area": "left",
+      "mode": "vertical",
+      "active": "scene",
+      "docks": ["scene", "content"]
+    },
+    {
+      "group_id": "modeling_compact_right",
+      "area": "right",
+      "mode": "vertical",
+      "active": "modeling",
+      "docks": ["modeling", "properties", "graph"]
+    },
+    {
+      "group_id": "modeling_compact_bottom",
+      "area": "bottom",
+      "mode": "tabbed",
+      "active": "jobs",
+      "docks": ["jobs"]
+    }
+  ],
+  "spacing": {
+    "margin": 4,
+    "panelSpacing": 4,
+    "toolbarSpacing": 2,
+    "inputHeight": 24,
+    "tableRowHeight": 21,
+    "treeRowHeight": 21,
+    "tabHeight": 17,
+    "tabPaddingX": 8,
+    "tabPaddingY": 4,
+    "groupboxMargin": 8,
+    "groupboxSpacing": 4,
+    "bottomStripHeight": 30,
+    "splitterHandleWidth": 5
+  }
+}

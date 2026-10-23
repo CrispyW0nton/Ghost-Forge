@@ -30,14 +30,14 @@ Ghost Forge is not trying to clone Blender or Maya overnight. Its credible wedge
 
 ## What Works Now
 
-- PySide6 desktop shell with project/content browser, theme system, scene outliner, viewport foundation, and modeling dock.
+- PySide6 desktop shell with project/content browser, theme system, file-backed workspace modules/layouts, scene outliner, viewport foundation, and tabbed modeling dock.
 - CPU-projected 3D viewport with mesh preview, camera presets, display modes, transform type-in, object/sub-object picking, and selection highlighting.
-- Universal mesh tooling for cleanup, normals, weld, smooth, subdivide, decimate, recenter, material assignment, selected delete/weld/flip normals, and operation history.
+- Universal mesh tooling for cleanup, normals, weld, smooth, subdivide, decimate, recenter, material assignment, selected delete/weld/flip normals, scene-object deletion, project-local generated output cleanup, and operation history.
 - Editable mesh core foundation with stable vertex/edge/face IDs, adjacency, validation, connected components, and delta undo/redo.
 - Worker registry with honest probes for TRELLIS, Hunyuan3D, TripoSG, InstantMesh, Paint3D, SyncMVD, silhouette image-to-3D, and stubs.
 - Hosted Tripo AI text-to-3D worker exposed as `tripo_api`, gated by server-side credentials.
 - Core-owned authoring graphs with text/image generation source nodes, worker refine/texture nodes, persisted graph resources, and durable `evaluate_edit_graph` jobs.
-- Qt operation-graph dock with descriptor-driven node parameter editing, shared operation presets, file/folder path pickers, button and drag/drop node reordering, per-node enable/disable bypass controls, visible background job progress/cancel/retry states, graph-linked audit jobs, per-node artifact/manifest/audit badges, persistent result history with stable scene/resource IDs, persisted active graph-history comparison pairs, a filterable model-backed resource list and metadata drill-down for outputs, artifacts, manifests, validation issue lists, provenance step lists, audit issue lists, bridge package history, bridge package JSON previews, graph-history delta comparison with non-adjacent pair selection, a summary table, and copyable MCP comparison URIs, shared-core Unity/Unreal retarget planning with model-backed remaining/new/resolved diagnostic diffs, manifest-gated Unity/Unreal bridge creation, failed-node focus, and scene/manifest/node-status updates on completion.
+- Qt operation-graph dock with descriptor-driven node parameter editing, shared operation presets, file/folder path pickers, button and drag/drop node reordering, per-node enable/disable bypass controls, visible background job progress/cancel/retry states, graph-linked audit jobs, per-node artifact/manifest/audit badges, persistent result history with stable scene/resource IDs, persisted active graph-history comparison pairs, a filterable model-backed resource list and metadata drill-down for outputs, artifacts, manifests, validation issue lists, provenance step lists, audit issue lists, bridge package history, bridge package JSON previews, graph-history delta comparison with non-adjacent pair selection, a summary table, copyable MCP comparison URIs, and comparison-driven follow-up actions that can add supported retarget repair nodes or request a follow-up audit, shared-core Unity/Unreal retarget planning with model-backed remaining/new/resolved diagnostic diffs, manifest-gated Unity/Unreal bridge creation, failed-node focus, and scene/manifest/node-status updates on completion.
 - MCP tools and prompts for worker probing, text/image generation, texture/refine jobs, audits, vertical slices, edit graphs, graph-history comparison, graph repair workflows, retarget planning, and Unity/Unreal handoff.
 - Asset manifests with geometry summaries, provenance, license, concept citations, validation summaries, engine targets, and bridge package history.
 - Offline export bridge packages for Unity-MCP-Ghost and Unreal-MCP-Ghost.
@@ -46,6 +46,8 @@ Ghost Forge is not trying to clone Blender or Maya overnight. Its credible wedge
 ## AI Content Generation
 
 Ghost Forge supports both local/optional model workers and hosted providers behind the same worker contract.
+
+Image-to-3D is currently most useful as a blockout/reference reconstruction step. For higher-fidelity results, use the operation graph as a pipeline: image source node, refine/retopo worker with a hero cleanup target, texture worker with a high-resolution preset, audit, then engine bridge packaging. The Workers panel is the authority on whether those steps are runnable, stubbed, or missing dependencies.
 
 Tripo AI text-to-3D uses the official Tripo OpenAPI task flow:
 
@@ -103,7 +105,7 @@ Near-term slices:
 2. Transform gizmo: move/rotate/scale handles, snapping, pivot/orientation modes.
 3. UV workspace MVP: 2D UV viewport, seam marking, unwrap, pack, checker, distortion overlay.
 4. Material/texture inspector: PBR slots, texture previews, provenance, material assignment.
-5. Operation/modifier graph polish: descriptor-driven parameter editors, artifact links/actions, manifest/audit badges, persisted result history and active comparison pairs, graph-result inspectors, persisted retarget diagnostics/comparisons, graph-history deltas with MCP links, and engine-readiness actions.
+5. Operation/modifier graph polish: descriptor-driven parameter editors, artifact links/actions, manifest/audit badges, persisted result history and active comparison pairs, graph-result inspectors, persisted retarget diagnostics/comparisons, graph-history deltas with MCP links, comparison-driven repair/audit follow-ups, and engine-readiness actions.
 6. AI worker manager: dependency probes, install/cache UI, hosted provider credentials, sample generation tests.
 7. Hosted Tripo generation: smart mesh presets, vertical-slice generation extras, Unity/Unreal bridge routing.
 8. Sculpt/retopo foundation: brushes, masking, remesh/decimate/retopo, projection, baking.

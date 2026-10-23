@@ -6,6 +6,8 @@ from typing import Callable
 
 from PySide6 import QtGui, QtWidgets
 
+from ghostforge_qt.icons import ActionIconRegistry
+
 
 @dataclass(frozen=True)
 class ActionSpec:
@@ -26,13 +28,20 @@ DEFAULT_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("file.quit", "Quit", "Ctrl+Q", "Close Ghost Forge."),
     ActionSpec("edit.undo", "Undo", "Ctrl+Z", "Undo the last mesh operation."),
     ActionSpec("edit.redo", "Redo", "Ctrl+Y", "Redo the last undone mesh operation."),
+    ActionSpec("edit.delete_selection", "Delete Selection", "Del", "Remove selected scene objects. Undo restores scene records."),
     ActionSpec("view.refresh_runtime", "Refresh Runtime", "F5", "Refresh workers, jobs, engines, and runtime probes."),
     ActionSpec("view.frame_all", "Frame All", "F", "Frame all scene objects in the viewport."),
+    ActionSpec("view.frame_selected", "Frame Selected", ".", "Frame the active object or sub-object selection."),
+    ActionSpec("view.save_layout", "Save Layout", None, "Save the current window, dock, and workspace layout."),
+    ActionSpec("view.reset_layout", "Reset Layout", None, "Reset the current workspace to its default layout."),
     ActionSpec("asset.unwrap", "Unwrap UVs", "Ctrl+U", "Submit a UV unwrap job for the selected asset."),
     ActionSpec("asset.texture", "Generate Texture", "Ctrl+T", "Submit a texture generation job for the selected asset."),
     ActionSpec("asset.audit", "Audit Asset", "Ctrl+Shift+A", "Run the game-readiness audit."),
     ActionSpec("asset.export_bridge", "Create Engine Bridge", "Ctrl+E", "Create a Unity or Unreal export bridge package."),
+    ActionSpec("asset.delete_generated", "Delete Generated Files...", None, "Permanently delete selected project-generated assets and remove them from the scene."),
     ActionSpec("tools.worker_models", "Worker Models", None, "Show worker and model runtime status."),
+    ActionSpec("help.testing_guide", "Testing Guide", "F1", "Show practical steps for testing Ghost Forge today."),
+    ActionSpec("help.create_test_cube", "Create Test Cube", None, "Create and import a simple cube for viewport and graph tests."),
     ActionSpec("help.about", "About Ghost Forge", None, "Show Ghost Forge version information."),
 )
 
@@ -42,6 +51,7 @@ class ActionRegistry:
 
     def __init__(self, owner: QtWidgets.QWidget) -> None:
         self.owner = owner
+        self.icons = ActionIconRegistry(owner)
         self._actions: OrderedDict[str, QtGui.QAction] = OrderedDict()
 
     def register(
@@ -51,6 +61,9 @@ class ActionRegistry:
     ) -> QtGui.QAction:
         action = QtGui.QAction(spec.text, self.owner)
         action.setObjectName(spec.action_id)
+        icon = self.icons.icon_for_action(spec.action_id, spec.text)
+        if not icon.isNull():
+            action.setIcon(icon)
         if spec.shortcut:
             action.setShortcut(QtGui.QKeySequence(spec.shortcut))
         if spec.status_tip:

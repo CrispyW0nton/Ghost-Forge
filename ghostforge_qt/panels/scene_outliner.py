@@ -12,7 +12,7 @@ class SceneOutlinerPanel(QtWidgets.QWidget):
         self.view = QtWidgets.QTableView()
         self.view.setModel(model)
         self.view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.view.horizontalHeader().setStretchLastSection(True)
         self.view.verticalHeader().hide()
 

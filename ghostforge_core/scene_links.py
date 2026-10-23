@@ -127,6 +127,45 @@ def compare_graph_history_payloads(
     }
 
 
+def plan_graph_history_followup_actions(
+    left: dict[str, object],
+    right: dict[str, object],
+    *,
+    base_name: str | None = None,
+) -> dict[str, object]:
+    """Suggest graph/audit actions from a graph-history comparison pair."""
+
+    comparison = compare_graph_history_payloads(left, right)
+    left_details = left.get("details") if isinstance(left.get("details"), dict) else {}
+    right_details = right.get("details") if isinstance(right.get("details"), dict) else {}
+    target_engine = _target_engine_from_details(left_details, right_details)
+    graph_id = str(right.get("graph_id") or left.get("graph_id") or "")
+
+    repair_nodes = _retarget_repair_node_actions(
+        comparison,
+        target_engine=target_engine,
+        graph_id=graph_id,
+        base_name=base_name,
+    )
+    audit_tasks = _audit_followup_tasks(
+        comparison,
+        left_details=left_details,
+        right_details=right_details,
+        target_engine=target_engine,
+    )
+    summary_parts: list[str] = []
+    if repair_nodes:
+        summary_parts.append(f"{len(repair_nodes)} repair node(s)")
+    if audit_tasks:
+        summary_parts.append(f"{len(audit_tasks)} audit task(s)")
+    return {
+        "has_actions": bool(repair_nodes or audit_tasks),
+        "summary": ", ".join(summary_parts) if summary_parts else "No follow-up actions suggested.",
+        "repair_nodes": repair_nodes,
+        "audit_tasks": audit_tasks,
+    }
+
+
 def annotate_graph_history_payload(
     payload: dict[str, object],
     *,
@@ -263,6 +302,185 @@ def _audit_change(left_details: object, right_details: object) -> dict[str, obje
     }
 
 
+def _target_engine_from_details(left_details: object, right_details: object) -> str:
+    for details in (right_details, left_details):
+        if not isinstance(details, dict):
+            continue
+        target = str(details.get("retarget_target") or "")
+        if target:
+            return target
+        audit = details.get("audit_history")
+        if isinstance(audit, dict):
+            preset = str(audit.get("preset") or "")
+            if preset in {"unity", "unreal"}:
+                return preset
+    return ""
+
+
+def _retarget_repair_node_actions(
+    comparison: dict[str, object],
+    *,
+    target_engine: str,
+    graph_id: str,
+    base_name: str | None,
+) -> list[dict[str, object]]:
+    if target_engine not in {"unity", "unreal"}:
+        return []
+    detail_changes = comparison.get("detail_changes")
+    if not isinstance(detail_changes, dict):
+        return []
+    diagnostics: list[tuple[str, str, str]] = []
+    for key in ("retarget_remaining", "retarget_new"):
+        change = detail_changes.get(key)
+        if not isinstance(change, dict):
+            continue
+        added = change.get("added")
+        if not isinstance(added, list):
+            continue
+        for item in added:
+            rule, code, text = _diagnostic_key_parts(item)
+            if rule:
+                diagnostics.append((rule, code, text))
+
+    actions: list[dict[str, object]] = []
+    emitted: set[str] = set()
+    for rule, code, text in diagnostics:
+        action = _retarget_repair_node_action(
+            rule,
+            code,
+            target_engine=target_engine,
+            graph_id=graph_id,
+            base_name=base_name,
+            diagnostic_key=text,
+        )
+        if action is None:
+            continue
+        node_kind = str(action["node_kind"])
+        if node_kind in emitted:
+            continue
+        emitted.add(node_kind)
+        actions.append(action)
+    return sorted(actions, key=lambda item: _repair_node_order(str(item.get("node_kind") or "")))
+
+
+def _retarget_repair_node_action(
+    rule: str,
+    code: str,
+    *,
+    target_engine: str,
+    graph_id: str,
+    base_name: str | None,
+    diagnostic_key: str,
+) -> dict[str, object] | None:
+    node_kind = ""
+    params: dict[str, object] = {}
+    if rule == "retarget.axis" or code == "axis_mismatch_assumed":
+        node_kind = "retarget_axis"
+        params = {"from": "gltf_canonical", "to": target_engine}
+    elif rule == "retarget.units" or code == "units_scale_required":
+        node_kind = "retarget_units"
+        params = {"to": target_engine}
+    elif rule == "retarget.pivot" or code == "pivot_not_at_base":
+        node_kind = "retarget_pivot_for_engine"
+        params = {"to": target_engine}
+    elif rule == "retarget.naming" or code in {"static_mesh_prefix_missing", "material_prefix_missing"}:
+        node_kind = "retarget_apply_naming"
+        params = {"to": target_engine, "base_name": base_name or "Asset"}
+    if not node_kind:
+        return None
+
+    action: dict[str, object] = {
+        "action_type": "append_graph_node",
+        "node_kind": node_kind,
+        "params": params,
+        "label": f"Add {node_kind}",
+        "reason": f"Repair unresolved {diagnostic_key} for {target_engine}.",
+        "diagnostic_key": diagnostic_key,
+        "mcp_tool": "append_graph_node",
+    }
+    if graph_id:
+        action["mcp_arguments"] = {
+            "graph_id": graph_id,
+            "kind": node_kind,
+            "params": params,
+            "label": f"History repair: {diagnostic_key}",
+        }
+    return action
+
+
+def _repair_node_order(node_kind: str) -> int:
+    order = {
+        "retarget_axis": 0,
+        "retarget_units": 1,
+        "retarget_pivot_for_engine": 2,
+        "retarget_apply_naming": 3,
+    }
+    return order.get(node_kind, 99)
+
+
+def _audit_followup_tasks(
+    comparison: dict[str, object],
+    *,
+    left_details: object,
+    right_details: object,
+    target_engine: str,
+) -> list[dict[str, object]]:
+    audit_changes = comparison.get("audit_changes")
+    if not isinstance(audit_changes, dict) or not audit_changes.get("has_changes"):
+        return []
+    preset = _audit_preset(right_details) or target_engine or _audit_preset(left_details) or "default"
+    asset_dir = _first_detail_path(right_details, "asset_dirs")
+    reason = "Re-run audit after graph-history comparison changed validation evidence."
+    issues_added = audit_changes.get("issues_added")
+    if isinstance(issues_added, list) and issues_added:
+        reason = f"Re-run audit after {len(issues_added)} new issue(s) appeared in graph history."
+    task: dict[str, object] = {
+        "action_type": "submit_audit",
+        "label": f"Run {preset} audit",
+        "preset": preset,
+        "reason": reason,
+        "mcp_tool": "submit_audit",
+    }
+    if asset_dir:
+        task["asset_dir"] = asset_dir
+        task["mcp_arguments"] = {
+            "asset_dir": asset_dir,
+            "preset": preset,
+            "run_gltf_validator": False,
+            "persist": True,
+        }
+    return [task]
+
+
+def _audit_preset(details: object) -> str:
+    if not isinstance(details, dict):
+        return ""
+    audit = details.get("audit_history")
+    if not isinstance(audit, dict):
+        return ""
+    return str(audit.get("preset") or "")
+
+
+def _first_detail_path(details: object, key: str) -> str:
+    values = _detail_list(details, key)
+    if not values:
+        return ""
+    return str(values[0])
+
+
+def _diagnostic_key_parts(item: object) -> tuple[str, str, str]:
+    if isinstance(item, dict):
+        rule = str(item.get("rule") or "")
+        code = str(item.get("code") or "")
+        text = f"{rule}:{code}".strip(":") or json.dumps(item, sort_keys=True, default=str)
+        return rule, code, text
+    text = str(item)
+    if ":" in text:
+        rule, code = text.split(":", 1)
+        return rule.strip(), code.strip(), text
+    return text.strip(), "", text
+
+
 def _stable_item_key(item: object) -> str:
     return json.dumps(_strip_link_fields(item), sort_keys=True, default=str, separators=(",", ":"))
 
@@ -293,6 +511,7 @@ __all__ = [
     "graph_history_comparison_resource_uri_from_payloads",
     "graph_history_resource_uri",
     "graph_resource_uri",
+    "plan_graph_history_followup_actions",
     "scene_id_for_path",
     "scene_resource_uri",
 ]

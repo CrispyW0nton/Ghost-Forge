@@ -103,6 +103,7 @@ def test_graph_tools_registered():
         "evaluate_edit_graph",
         "submit_evaluate_edit_graph",
         "compare_scene_graph_history",
+        "plan_scene_graph_history_followups",
     }
     missing = expected - names
     assert not missing, f"missing P11 tools: {missing}"
@@ -264,7 +265,10 @@ def test_scene_resources_expose_graph_history_links(tmp_path):
                                     ],
                                     "manifest_paths": [str(tmp_path / "asset_manifest.json")],
                                     "bridge_paths": [str(tmp_path / "ghostforge_bridge_unity.json")],
+                                    "retarget_target": "unity",
+                                    "retarget_remaining": ["retarget.units:units_scale_required"],
                                     "retarget_resolved": ["retarget.axis:axis_mismatch_assumed"],
+                                    "asset_dirs": [str(tmp_path / "asset")],
                                     "audit_history": {
                                         "preset": "unity",
                                         "status": "warnings",
@@ -334,6 +338,14 @@ def test_scene_resources_expose_graph_history_links(tmp_path):
         "left": 0,
         "right": 1,
     }
+    assert comparison["followups"]["repair_nodes"][0]["node_kind"] == "retarget_units"
+    assert comparison["followups"]["repair_nodes"][0]["mcp_arguments"] == {
+        "graph_id": "obj_cube_graph",
+        "kind": "retarget_units",
+        "params": {"to": "unity"},
+        "label": "History repair: retarget.units:units_scale_required",
+    }
+    assert comparison["followups"]["audit_tasks"][0]["preset"] == "unity"
 
     resource_comparison = _resource_payload(
         asyncio.run(
@@ -344,6 +356,20 @@ def test_scene_resources_expose_graph_history_links(tmp_path):
         )
     )
     assert resource_comparison["resource_uri"] == comparison["resource_uri"]
+    assert resource_comparison["followups"] == comparison["followups"]
+
+    followups = _call(
+        server,
+        "plan_scene_graph_history_followups",
+        {
+            "scene_id": "level_one",
+            "object_id": "obj_cube",
+            "left_history_id": left_id,
+            "right_history_id": right_id,
+            "base_name": "Cube",
+        },
+    )
+    assert followups["followups"] == comparison["followups"]
 
 
 def test_create_get_delete_graph_round_trip():

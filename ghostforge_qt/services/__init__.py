@@ -14,7 +14,7 @@ from .job_controller import JobController
 from .mesh_diagnostics import MeshTopologySummary, analyze_mesh
 from .mesh_operation_service import MeshOperationOutput, MeshOperationSelection, MeshOperationService
 from .mesh_selection import MeshSelectionState
-from .operation_history import OperationHistory, ScenePathCommand
+from .operation_history import OperationHistory, SceneHistoryCommand, ScenePathCommand, SceneTransformCommand
 from .project_service import ProjectService, ProjectState
 from .scene_document import SceneDocument, SceneDocumentService
 
@@ -39,7 +39,9 @@ __all__ = [
     "ProjectService",
     "ProjectState",
     "RuntimeSnapshot",
+    "SceneHistoryCommand",
     "ScenePathCommand",
+    "SceneTransformCommand",
     "SceneDocument",
     "SceneDocumentService",
     "WorkerRow",

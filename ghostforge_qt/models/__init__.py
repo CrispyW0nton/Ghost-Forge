@@ -8,7 +8,9 @@ from .operation_graph_model import (
     OperationPaletteModel,
 )
 from .scene_model import SceneObjectRecord, SceneTableModel, TransformState
+from .viewport_model import ViewportDiagnosticRow, ViewportDiagnosticsModel
 from .worker_model import WorkerTableModel
+from .workspace_model import WorkspaceModuleModel
 
 __all__ = [
     "JobTableModel",
@@ -19,5 +21,8 @@ __all__ = [
     "SceneObjectRecord",
     "SceneTableModel",
     "TransformState",
+    "ViewportDiagnosticRow",
+    "ViewportDiagnosticsModel",
     "WorkerTableModel",
+    "WorkspaceModuleModel",
 ]

@@ -35,6 +35,24 @@ def _ctx(mesh, params):
 
 
 # ---------------------------------------------------------------------------
+# Source primitives
+# ---------------------------------------------------------------------------
+
+
+def test_create_box_source_operation_without_input_mesh(registry):
+    op = registry.get("create_box")
+    out = op(_ctx(None, {"extents": [2.0, 3.0, 4.0], "center": [1.0, 2.0, 3.0]}))
+    assert np.allclose(out.extents, np.array([2.0, 3.0, 4.0]))
+    assert np.allclose(out.bounds.mean(axis=0), np.array([1.0, 2.0, 3.0]), atol=1e-6)
+
+
+def test_create_box_rejects_nonpositive_extents(registry):
+    op = registry.get("create_box")
+    with pytest.raises(OperationError):
+        op(_ctx(None, {"extents": [1.0, 0.0, 1.0]}))
+
+
+# ---------------------------------------------------------------------------
 # Transform / placement
 # ---------------------------------------------------------------------------
 
@@ -207,6 +225,7 @@ def test_registry_descriptors_sorted_by_category_kind(registry):
     kinds = {d.kind for d in descriptors}
     expected = {
         "transform",
+        "create_box",
         "recenter",
         "normalize_scale",
         "recompute_normals",

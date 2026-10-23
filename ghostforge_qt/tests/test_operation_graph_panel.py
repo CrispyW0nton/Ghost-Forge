@@ -51,6 +51,26 @@ def _job(
     )
 
 
+def test_operation_graph_panel_uses_tabbed_scrollable_dcc_layout(qapp, tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path, dispatch_jobs=False))
+    panel = OperationGraphPanel(bridge)
+
+    try:
+        assert panel.graph_tabs.count() == 3
+        assert panel.graph_tabs.tabText(0) == "Build"
+        assert panel.graph_tabs.tabText(1) == "Results"
+        assert panel.graph_tabs.tabText(2) == "Params / Job"
+        assert panel.minimumWidth() <= 380
+        assert panel.palette_view.minimumHeight() >= 120
+        assert panel.graph_view.minimumHeight() >= 148
+        assert panel.graph_view.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        assert panel.parameter_form.layout().rowWrapPolicy() == QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
+        scroll_areas = panel.findChildren(QtWidgets.QScrollArea)
+        assert any(area.widget() is panel.parameter_form for area in scroll_areas)
+    finally:
+        panel.deleteLater()
+
+
 def test_operation_parameter_form_reads_descriptor_schema(qapp):
     operation = OperationRow(
         kind="generate_text_to_3d",
@@ -454,9 +474,12 @@ def test_operation_graph_panel_compares_selected_history_payload(qapp, tmp_path)
         "message": "audit warnings",
         "details": {
             "artifact_paths": [str(tmp_path / "cube_latest.glb"), str(tmp_path / "cube_albedo.png")],
+            "asset_dirs": [str(tmp_path / "cube_asset")],
             "bridge_paths": [str(tmp_path / "ghostforge_bridge_unity.json")],
+            "retarget_target": "unreal",
             "retarget_remaining": ["retarget.units:units_scale_required"],
             "audit_history": {
+                "preset": "unreal",
                 "status": "warnings",
                 "error_count": 0,
                 "warning_count": 1,
@@ -520,6 +543,24 @@ def test_operation_graph_panel_compares_selected_history_payload(qapp, tmp_path)
         )
         assert panel.history_comparison_uri.text() == panel.selected_history_comparison_resource_uri()
         assert panel.copy_history_comparison_link_button.isEnabled()
+        followups = panel.selected_history_followup_actions()
+        assert followups["repair_nodes"][0]["node_kind"] == "retarget_units"
+        assert followups["repair_nodes"][0]["params"] == {"to": "unreal"}
+        assert "Repair nodes: retarget_units" in panel.history_followups.text()
+        assert panel.add_history_repair_nodes_button.isEnabled()
+        assert panel.run_history_followup_audit_button.isEnabled()
+
+        audit_presets: list[str] = []
+        panel.historyAuditFollowupRequested.connect(audit_presets.append)
+        panel.run_history_followup_audit_button.click()
+        assert audit_presets == ["unreal"]
+
+        panel.add_history_repair_nodes_button.click()
+        assert panel.graph_model.rowCount() == 1
+        repair_node = panel.graph_model.node_at(0)
+        assert repair_node is not None
+        assert repair_node.kind == "retarget_units"
+        assert repair_node.params == {"to": "unreal"}
 
         emitted_pairs: list[dict[str, str]] = []
         panel.historyComparisonPairChanged.connect(emitted_pairs.append)

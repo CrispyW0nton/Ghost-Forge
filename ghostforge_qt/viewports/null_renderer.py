@@ -42,3 +42,6 @@ class NullRenderer(QtCore.QObject):
     def frame_all(self) -> None:
         # Real renderers will update the camera; the null renderer is static.
         return None
+
+    def frame_selected(self) -> bool:
+        return False

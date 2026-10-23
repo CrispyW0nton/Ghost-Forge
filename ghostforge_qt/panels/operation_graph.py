@@ -9,6 +9,7 @@ from ghostforge_core.authoring import EditGraph, EvaluationResult
 from ghostforge_core.scene_links import (
     compare_graph_history_payloads,
     graph_history_comparison_resource_uri_from_payloads,
+    plan_graph_history_followup_actions,
 )
 from ghostforge_core.types import JobHandle
 from ghostforge_qt.models.operation_graph_model import (
@@ -39,6 +40,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
     revealGraphPathRequested = QtCore.Signal(str)
     historyComparisonLinkCopied = QtCore.Signal(str)
     historyComparisonPairChanged = QtCore.Signal(object)
+    historyAuditFollowupRequested = QtCore.Signal(str)
 
     def __init__(self, bridge: CoreBridge, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -79,6 +81,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self._resource_rows: tuple[GraphResultResource, ...] = ()
         self._last_history_comparison: dict[str, object] | None = None
         self._last_history_comparison_uri: str = ""
+        self._last_history_followups: dict[str, object] = _empty_history_followups()
         self._history_comparison_pair_ids: tuple[str, str] | None = None
         self._history_comparison_pair_locked = False
         self._syncing_history_comparison_controls = False
@@ -88,25 +91,37 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.refresh()
 
     def _build(self) -> None:
+        self.setMinimumWidth(360)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
         context = QtWidgets.QGroupBox("Context")
         context_form = QtWidgets.QFormLayout(context)
+        context_form.setContentsMargins(8, 8, 8, 8)
+        context_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         context_form.addRow("Active", self.active_object)
         root.addWidget(context)
+
+        self.graph_tabs = QtWidgets.QTabWidget()
+        self.graph_tabs.setObjectName("GhostForgeGraphTabs")
+        self.graph_tabs.setDocumentMode(True)
+        root.addWidget(self.graph_tabs, 1)
+
+        build_page = QtWidgets.QWidget()
+        build_layout = QtWidgets.QVBoxLayout(build_page)
+        build_layout.setContentsMargins(6, 6, 6, 6)
+        build_layout.setSpacing(6)
 
         self.palette_view = QtWidgets.QTableView()
         self.palette_view.setModel(self.palette_model)
         self.palette_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.palette_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.palette_view.horizontalHeader().setStretchLastSection(True)
-        self.palette_view.verticalHeader().hide()
-        root.addWidget(QtWidgets.QLabel("Operations"))
-        root.addWidget(self.palette_view, 2)
+        _configure_table(self.palette_view, minimum_height=128)
+        build_layout.addWidget(_section_label("Operations"))
+        build_layout.addWidget(self.palette_view, 1)
 
-        button_row = QtWidgets.QHBoxLayout()
         self.refresh_button = QtWidgets.QPushButton("Refresh")
         self.add_button = QtWidgets.QPushButton("Add Node")
         self.remove_button = QtWidgets.QPushButton("Remove Node")
@@ -126,18 +141,21 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.toggle_node_button.clicked.connect(self.toggle_selected_node_enabled)
         self.apply_params_button.clicked.connect(self.apply_selected_node_params)
         self.evaluate_button.clicked.connect(self.evaluateRequested.emit)
-        for button in (
-            self.refresh_button,
-            self.add_button,
-            self.remove_button,
-            self.move_up_button,
-            self.move_down_button,
-            self.toggle_node_button,
-            self.apply_params_button,
-            self.evaluate_button,
-        ):
-            button_row.addWidget(button)
-        root.addLayout(button_row)
+        build_layout.addLayout(
+            _button_grid(
+                (
+                    self.refresh_button,
+                    self.add_button,
+                    self.remove_button,
+                    self.move_up_button,
+                    self.move_down_button,
+                    self.toggle_node_button,
+                    self.apply_params_button,
+                    self.evaluate_button,
+                ),
+                columns=4,
+            )
+        )
 
         self.graph_view = QtWidgets.QTableView()
         self.graph_view.setModel(self.graph_model)
@@ -149,21 +167,30 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.graph_view.setDragDropOverwriteMode(False)
         self.graph_view.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
         self.graph_view.setDropIndicatorShown(True)
-        self.graph_view.horizontalHeader().setStretchLastSection(True)
-        self.graph_view.verticalHeader().hide()
-        root.addWidget(QtWidgets.QLabel("Graph"))
-        root.addWidget(self.graph_view, 2)
+        _configure_table(self.graph_view, minimum_height=152)
+        build_layout.addWidget(_section_label("Graph"))
+        build_layout.addWidget(self.graph_view, 1)
+        self.graph_tabs.addTab(build_page, "Build")
+
+        results_page = QtWidgets.QWidget()
+        results_layout = QtWidgets.QVBoxLayout(results_page)
+        results_layout.setContentsMargins(6, 6, 6, 6)
+        results_layout.setSpacing(6)
+
         self.history_view = QtWidgets.QTableView()
         self.history_view.setModel(self.history_model)
         self.history_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.history_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.history_view.horizontalHeader().setStretchLastSection(True)
-        self.history_view.verticalHeader().hide()
-        root.addWidget(QtWidgets.QLabel("Result History"))
-        root.addWidget(self.history_view, 1)
+        _configure_table(self.history_view, minimum_height=108)
+        results_layout.addWidget(_section_label("Result History"))
+        results_layout.addWidget(self.history_view, 0)
 
         inspector = QtWidgets.QGroupBox("Result Inspector")
         inspector_layout = QtWidgets.QFormLayout(inspector)
+        inspector_layout.setContentsMargins(8, 8, 8, 8)
+        inspector_layout.setSpacing(6)
+        inspector_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        inspector_layout.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         self.result_summary = QtWidgets.QLabel("No graph result selected.")
         self.result_output = QtWidgets.QLabel("-")
         self.result_artifacts = QtWidgets.QLabel("-")
@@ -176,6 +203,11 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.history_comparison_uri = QtWidgets.QLabel("-")
         self.copy_history_comparison_link_button = QtWidgets.QPushButton("Copy Compare URI")
         self.copy_history_comparison_link_button.setEnabled(False)
+        self.history_followups = QtWidgets.QLabel("No graph-history follow-up actions.")
+        self.add_history_repair_nodes_button = QtWidgets.QPushButton("Add Repair Nodes")
+        self.run_history_followup_audit_button = QtWidgets.QPushButton("Run Follow-Up Audit")
+        self.add_history_repair_nodes_button.setEnabled(False)
+        self.run_history_followup_audit_button.setEnabled(False)
         for label in (
             self.result_summary,
             self.result_output,
@@ -185,6 +217,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
             self.retarget_diagnostics,
             self.history_comparison,
             self.history_comparison_uri,
+            self.history_followups,
         ):
             label.setWordWrap(True)
         self.history_comparison.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -199,11 +232,11 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.retarget_view.setModel(self.retarget_model)
         self.retarget_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.retarget_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.retarget_view.horizontalHeader().setStretchLastSection(True)
-        self.retarget_view.verticalHeader().hide()
-        self.retarget_view.setMinimumHeight(76)
+        _configure_table(self.retarget_view, minimum_height=96)
         inspector_layout.addRow("Retarget Diff", self.retarget_view)
         compare_row = QtWidgets.QHBoxLayout()
+        compare_row.setContentsMargins(0, 0, 0, 0)
+        compare_row.setSpacing(4)
         compare_row.addWidget(QtWidgets.QLabel("From"))
         compare_row.addWidget(self.history_compare_left, 1)
         compare_row.addWidget(QtWidgets.QLabel("To"))
@@ -214,14 +247,21 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.history_delta_view.setModel(self.history_delta_model)
         self.history_delta_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.history_delta_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.history_delta_view.horizontalHeader().setStretchLastSection(True)
-        self.history_delta_view.verticalHeader().hide()
-        self.history_delta_view.setMinimumHeight(96)
+        _configure_table(self.history_delta_view, minimum_height=108)
         inspector_layout.addRow("Delta Table", self.history_delta_view)
         comparison_link_row = QtWidgets.QHBoxLayout()
+        comparison_link_row.setContentsMargins(0, 0, 0, 0)
+        comparison_link_row.setSpacing(4)
         comparison_link_row.addWidget(self.history_comparison_uri, 1)
         comparison_link_row.addWidget(self.copy_history_comparison_link_button)
         inspector_layout.addRow("MCP Compare", comparison_link_row)
+        followup_row = QtWidgets.QHBoxLayout()
+        followup_row.setContentsMargins(0, 0, 0, 0)
+        followup_row.setSpacing(4)
+        followup_row.addWidget(self.history_followups, 1)
+        followup_row.addWidget(self.add_history_repair_nodes_button)
+        followup_row.addWidget(self.run_history_followup_audit_button)
+        inspector_layout.addRow("Follow-Up", followup_row)
         self.resource_filter = QtWidgets.QComboBox()
         for label, kind in (
             ("All", "all"),
@@ -238,15 +278,13 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.resource_view.setModel(self.resource_model)
         self.resource_view.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.resource_view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.resource_view.horizontalHeader().setStretchLastSection(True)
-        self.resource_view.verticalHeader().hide()
-        self.resource_view.setMinimumHeight(96)
+        _configure_table(self.resource_view, minimum_height=120)
         inspector_layout.addRow("Resources", self.resource_view)
         self.resource_details = QtWidgets.QLabel("No resource selected.")
         self.resource_details.setWordWrap(True)
+        self.resource_details.setMinimumHeight(64)
         self.resource_details.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         inspector_layout.addRow("Details", self.resource_details)
-        path_buttons = QtWidgets.QHBoxLayout()
         self.open_output_button = QtWidgets.QPushButton("Open Output")
         self.reveal_output_button = QtWidgets.QPushButton("Reveal Output")
         self.open_resource_button = QtWidgets.QPushButton("Open Selected")
@@ -264,7 +302,6 @@ class OperationGraphPanel(QtWidgets.QWidget):
             self.reveal_asset_dir_button,
         ):
             button.setEnabled(False)
-            path_buttons.addWidget(button)
         self.open_output_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("output"))
         self.reveal_output_button.clicked.connect(lambda _checked=False: self._emit_reveal_result_path("output"))
         self.open_resource_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("selected"))
@@ -272,8 +309,22 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.open_artifact_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("artifact"))
         self.open_manifest_button.clicked.connect(lambda _checked=False: self._emit_open_result_path("manifest"))
         self.reveal_asset_dir_button.clicked.connect(lambda _checked=False: self._emit_reveal_result_path("asset_dir"))
+        path_buttons = _button_grid(
+            (
+                self.open_output_button,
+                self.reveal_output_button,
+                self.open_resource_button,
+                self.reveal_resource_button,
+                self.open_artifact_button,
+                self.open_manifest_button,
+                self.reveal_asset_dir_button,
+            ),
+            columns=2,
+        )
         inspector_layout.addRow("Files", path_buttons)
         bridge_buttons = QtWidgets.QHBoxLayout()
+        bridge_buttons.setContentsMargins(0, 0, 0, 0)
+        bridge_buttons.setSpacing(4)
         self.create_unity_bridge_button = QtWidgets.QPushButton("Unity Bridge")
         self.create_unreal_bridge_button = QtWidgets.QPushButton("Unreal Bridge")
         self.create_unity_bridge_button.setEnabled(False)
@@ -284,6 +335,8 @@ class OperationGraphPanel(QtWidgets.QWidget):
         bridge_buttons.addWidget(self.create_unreal_bridge_button)
         inspector_layout.addRow("Export", bridge_buttons)
         retarget_buttons = QtWidgets.QHBoxLayout()
+        retarget_buttons.setContentsMargins(0, 0, 0, 0)
+        retarget_buttons.setSpacing(4)
         self.plan_unity_retarget_button = QtWidgets.QPushButton("Plan Unity Retarget")
         self.plan_unreal_retarget_button = QtWidgets.QPushButton("Plan Unreal Retarget")
         self.plan_unity_retarget_button.setEnabled(False)
@@ -293,24 +346,32 @@ class OperationGraphPanel(QtWidgets.QWidget):
         retarget_buttons.addWidget(self.plan_unity_retarget_button)
         retarget_buttons.addWidget(self.plan_unreal_retarget_button)
         inspector_layout.addRow("Retarget", retarget_buttons)
-        root.addWidget(inspector)
+        results_layout.addWidget(_scroll_area(inspector), 1)
+        self.graph_tabs.addTab(results_page, "Results")
 
-        root.addWidget(QtWidgets.QLabel("Parameters"))
-        root.addWidget(self.parameter_form)
+        params_page = QtWidgets.QWidget()
+        params_layout = QtWidgets.QVBoxLayout(params_page)
+        params_layout.setContentsMargins(6, 6, 6, 6)
+        params_layout.setSpacing(6)
+        params_layout.addWidget(_section_label("Parameters"))
+        params_layout.addWidget(_scroll_area(self.parameter_form), 1)
         job_box = QtWidgets.QGroupBox("Evaluation Job")
         job_layout = QtWidgets.QVBoxLayout(job_box)
+        job_layout.setContentsMargins(8, 8, 8, 8)
+        job_layout.setSpacing(6)
         job_layout.addWidget(self.job_status)
         job_layout.addWidget(self.job_progress)
-        job_buttons = QtWidgets.QHBoxLayout()
         self.cancel_job_button.clicked.connect(self._cancel_graph_job)
         self.retry_button.clicked.connect(self.evaluateRequested.emit)
         self.audit_button.clicked.connect(self.auditGraphResultRequested.emit)
-        job_buttons.addWidget(self.cancel_job_button)
-        job_buttons.addWidget(self.retry_button)
-        job_buttons.addWidget(self.audit_button)
+        job_buttons = _button_grid(
+            (self.cancel_job_button, self.retry_button, self.audit_button),
+            columns=3,
+        )
         job_layout.addLayout(job_buttons)
         job_layout.addWidget(self.audit_status)
-        root.addWidget(job_box)
+        params_layout.addWidget(job_box, 0)
+        self.graph_tabs.addTab(params_page, "Params / Job")
         root.addWidget(self.status)
 
         self.palette_view.selectionModel().selectionChanged.connect(lambda *_: self._palette_selection_changed())
@@ -320,8 +381,33 @@ class OperationGraphPanel(QtWidgets.QWidget):
         self.history_compare_left.currentIndexChanged.connect(lambda *_: self._history_comparison_pair_changed())
         self.history_compare_right.currentIndexChanged.connect(lambda *_: self._history_comparison_pair_changed())
         self.copy_history_comparison_link_button.clicked.connect(self.copy_history_comparison_link)
+        self.add_history_repair_nodes_button.clicked.connect(self.add_history_repair_nodes)
+        self.run_history_followup_audit_button.clicked.connect(self.run_history_followup_audit)
         self.resource_filter.currentIndexChanged.connect(lambda *_: self._refresh_resource_table())
         self.resource_view.selectionModel().selectionChanged.connect(lambda *_: self._refresh_resource_selection())
+
+    def apply_ghost_layout(self, layout) -> None:  # noqa: ANN001 - shared layout hook
+        margin = max(4, int(layout.spacing_value("margin", 6)))
+        spacing = max(4, int(layout.spacing_value("panelSpacing", 6)))
+        table_height = max(96, int(layout.spacing_value("graphTableMinHeight", 128)))
+        root = self.layout()
+        if root is not None:
+            root.setContentsMargins(margin, margin, margin, margin)
+            root.setSpacing(spacing)
+        self.palette_view.setMinimumHeight(table_height)
+        self.graph_view.setMinimumHeight(max(table_height, 148))
+        self.history_view.setMinimumHeight(max(88, table_height - 24))
+        for table in (
+            self.palette_view,
+            self.graph_view,
+            self.history_view,
+            self.retarget_view,
+            self.history_delta_view,
+            self.resource_view,
+        ):
+            table.verticalHeader().setDefaultSectionSize(max(22, int(layout.spacing_value("tableRowHeight", 23))))
+            table.resizeColumnsToContents()
+            table.horizontalHeader().setStretchLastSection(True)
 
     @QtCore.Slot()
     def refresh(self) -> None:
@@ -574,6 +660,9 @@ class OperationGraphPanel(QtWidgets.QWidget):
     def selected_history_comparison_resource_uri(self) -> str:
         return self._last_history_comparison_uri
 
+    def selected_history_followup_actions(self) -> dict[str, object]:
+        return dict(self._last_history_followups)
+
     @QtCore.Slot()
     def copy_history_comparison_link(self) -> None:
         uri = self.selected_history_comparison_resource_uri()
@@ -583,6 +672,40 @@ class OperationGraphPanel(QtWidgets.QWidget):
         QtGui.QGuiApplication.clipboard().setText(uri)
         self.status.setText("Copied graph-history comparison URI.")
         self.historyComparisonLinkCopied.emit(uri)
+
+    @QtCore.Slot()
+    def add_history_repair_nodes(self) -> None:
+        repair_nodes = _history_followup_repair_nodes(self._last_history_followups)
+        if not repair_nodes:
+            self.status.setText("No graph-history repair nodes are available.")
+            return
+        added: list[str] = []
+        missing: list[str] = []
+        for action in repair_nodes:
+            kind = str(action.get("node_kind") or "")
+            operation = self._operations_by_kind.get(kind)
+            if operation is None:
+                missing.append(kind)
+                continue
+            params = action.get("params") if isinstance(action.get("params"), dict) else {}
+            node = self.graph_model.append_operation(operation, dict(params))
+            added.append(node.kind)
+        if added:
+            self.graph_view.selectRow(self.graph_model.rowCount() - 1)
+            message = f"Added {len(added)} graph-history repair node(s): {', '.join(added)}."
+            if missing:
+                message += f" Missing: {', '.join(missing)}."
+            self.status.setText(message)
+            self.graphChanged.emit(self.graph_model.graph())
+            return
+        self.status.setText(f"No suggested repair nodes are supported here: {', '.join(missing)}.")
+
+    @QtCore.Slot()
+    def run_history_followup_audit(self) -> None:
+        audit_tasks = _history_followup_audit_tasks(self._last_history_followups)
+        preset = str(audit_tasks[0].get("preset") or "default") if audit_tasks else "default"
+        self.status.setText(f"Requested {preset} follow-up audit from graph-history delta.")
+        self.historyAuditFollowupRequested.emit(preset)
 
     def set_result_manifest(
         self,
@@ -873,6 +996,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
         right_index = _combo_int_data(self.history_compare_right)
         comparison: dict[str, object] | None = None
         uri = ""
+        followups: dict[str, object] = _empty_history_followups()
         if (
             left_index is not None
             and right_index is not None
@@ -882,6 +1006,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
         ):
             comparison = compare_graph_history_payloads(payloads[left_index], payloads[right_index])
             uri = graph_history_comparison_resource_uri_from_payloads(payloads[left_index], payloads[right_index])
+            followups = plan_graph_history_followup_actions(payloads[left_index], payloads[right_index])
         self._history_comparison_pair_ids = _history_comparison_pair_ids_from_indices(
             payloads,
             left_index,
@@ -889,6 +1014,7 @@ class OperationGraphPanel(QtWidgets.QWidget):
         )
         self._last_history_comparison = comparison
         self._last_history_comparison_uri = uri
+        self._last_history_followups = dict(followups)
         self.history_delta_model.set_rows(_history_delta_rows(comparison))
         if self.history_delta_model.rowCount():
             self.history_delta_view.selectRow(0)
@@ -905,6 +1031,11 @@ class OperationGraphPanel(QtWidgets.QWidget):
         )
         self.history_comparison_uri.setText(uri or "-")
         self.copy_history_comparison_link_button.setEnabled(bool(uri))
+        self.history_followups.setText(_history_followup_text(followups))
+        self.add_history_repair_nodes_button.setEnabled(
+            bool(_history_followup_supported_repair_nodes(followups, self._operations_by_kind))
+        )
+        self.run_history_followup_audit_button.setEnabled(bool(_history_followup_audit_tasks(followups)))
 
     def _refresh_retarget_table(self) -> None:
         rows = _retarget_diagnostic_rows(
@@ -1304,6 +1435,57 @@ def _history_id_at_index(payloads: tuple[dict[str, object], ...], index: int | N
     if index is None or index < 0 or index >= len(payloads):
         return ""
     return str(payloads[index].get("history_id") or "")
+
+
+def _empty_history_followups() -> dict[str, object]:
+    return {
+        "has_actions": False,
+        "summary": "No follow-up actions suggested.",
+        "repair_nodes": [],
+        "audit_tasks": [],
+    }
+
+
+def _history_followup_repair_nodes(plan: dict[str, object]) -> list[dict[str, object]]:
+    nodes = plan.get("repair_nodes") if isinstance(plan, dict) else None
+    if not isinstance(nodes, list):
+        return []
+    return [dict(item) for item in nodes if isinstance(item, dict)]
+
+
+def _history_followup_supported_repair_nodes(
+    plan: dict[str, object],
+    operations_by_kind: dict[str, OperationRow],
+) -> list[dict[str, object]]:
+    return [
+        item
+        for item in _history_followup_repair_nodes(plan)
+        if str(item.get("node_kind") or "") in operations_by_kind
+    ]
+
+
+def _history_followup_audit_tasks(plan: dict[str, object]) -> list[dict[str, object]]:
+    tasks = plan.get("audit_tasks") if isinstance(plan, dict) else None
+    if not isinstance(tasks, list):
+        return []
+    return [dict(item) for item in tasks if isinstance(item, dict)]
+
+
+def _history_followup_text(plan: dict[str, object]) -> str:
+    if not isinstance(plan, dict) or not plan.get("has_actions"):
+        return "No graph-history follow-up actions."
+    parts: list[str] = []
+    repair_nodes = _history_followup_repair_nodes(plan)
+    if repair_nodes:
+        kinds = ", ".join(str(item.get("node_kind") or "repair") for item in repair_nodes[:3])
+        if len(repair_nodes) > 3:
+            kinds += f", +{len(repair_nodes) - 3} more"
+        parts.append(f"Repair nodes: {kinds}")
+    audit_tasks = _history_followup_audit_tasks(plan)
+    if audit_tasks:
+        presets = ", ".join(str(item.get("preset") or "default") for item in audit_tasks[:2])
+        parts.append(f"Audit tasks: {presets}")
+    return " | ".join(parts) if parts else str(plan.get("summary") or "Follow-up actions available.")
 
 
 def _default_history_comparison_pair(
@@ -2025,6 +2207,56 @@ def _latest_planned_retarget_report(
         if isinstance(report, dict):
             return dict(report)
     return {}
+
+
+def _section_label(text: str) -> QtWidgets.QLabel:
+    label = QtWidgets.QLabel(text)
+    label.setObjectName("GhostForgePanelSectionLabel")
+    label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+    return label
+
+
+def _configure_table(view: QtWidgets.QTableView, *, minimum_height: int) -> None:
+    view.setAlternatingRowColors(True)
+    view.setMinimumHeight(minimum_height)
+    view.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
+    view.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    view.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    view.setWordWrap(False)
+    view.verticalHeader().hide()
+    view.verticalHeader().setDefaultSectionSize(23)
+    header = view.horizontalHeader()
+    header.setStretchLastSection(True)
+    header.setMinimumSectionSize(64)
+    header.setDefaultSectionSize(112)
+    header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Interactive)
+
+
+def _button_grid(buttons: tuple[QtWidgets.QPushButton, ...], *, columns: int) -> QtWidgets.QGridLayout:
+    grid = QtWidgets.QGridLayout()
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(4)
+    grid.setVerticalSpacing(4)
+    for index, button in enumerate(buttons):
+        button.setMinimumWidth(76)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        row, column = divmod(index, max(1, columns))
+        grid.addWidget(button, row, column)
+    for column in range(max(1, columns)):
+        grid.setColumnStretch(column, 1)
+    return grid
+
+
+def _scroll_area(widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+    area = QtWidgets.QScrollArea()
+    area.setObjectName("GhostForgePanelScrollArea")
+    area.setWidgetResizable(True)
+    area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum)
+    area.setWidget(widget)
+    return area
 
 
 __all__ = ["OperationGraphPanel"]

@@ -112,6 +112,13 @@ class SceneTableModel(QtCore.QAbstractTableModel):
         self.endInsertRows()
         return record
 
+    def insert_record(self, row: int, record: SceneObjectRecord) -> SceneObjectRecord:
+        target = max(0, min(int(row), len(self._rows)))
+        self.beginInsertRows(QtCore.QModelIndex(), target, target)
+        self._rows.insert(target, record)
+        self.endInsertRows()
+        return record
+
     def set_records(self, records: list[SceneObjectRecord]) -> None:
         self.beginResetModel()
         self._rows = list(records)
@@ -131,6 +138,12 @@ class SceneTableModel(QtCore.QAbstractTableModel):
         record = self._rows.pop(row)
         self.endRemoveRows()
         return record
+
+    def row_for_object_id(self, object_id: str) -> int:
+        for row, record in enumerate(self._rows):
+            if record.object_id == object_id:
+                return row
+        return -1
 
     def record_at(self, row: int) -> SceneObjectRecord | None:
         if row < 0 or row >= len(self._rows):

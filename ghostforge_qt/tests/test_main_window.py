@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import time
 
-from PySide6 import QtCore
+from PySide6 import QtCore, QtWidgets
 
 from ghostforge_core import CoreConfig
 from ghostforge_core.manifest import read_manifest
 from ghostforge_core.workers.stub import StubTextTo3DWorker
-from ghostforge_qt.models.scene_model import TransformState
+from ghostforge_qt.layouts import ToolbarLayout, WorkspaceLayoutLoadResult, default_workspace_layouts, settings_scope_for_path
+from ghostforge_qt.models.scene_model import SceneObjectRecord, TransformState
 from ghostforge_qt.services.core_bridge import CoreBridge
-from ghostforge_qt.windows.main_window import MainWindow
+from ghostforge_qt.viewports.transform_gizmo import TransformGizmoEdit
+from ghostforge_qt.workspaces import WorkspaceModuleLoadResult, WorkspaceViewportDefaults, default_workspace_modules
+from ghostforge_qt.windows.main_window import MainWindow, WINDOW_LAYOUT_STATE_VERSION
+import ghostforge_qt.windows.main_window as main_window_module
 import trimesh
 
 
@@ -32,18 +37,398 @@ def test_main_window_registers_editor_actions(qapp, tmp_path):
         ids = set(window.actions.ids())
 
         assert "file.import_mesh" in ids
+        assert "edit.delete_selection" in ids
+        assert "view.frame_selected" in ids
         assert "asset.unwrap" in ids
         assert "asset.texture" in ids
         assert "asset.audit" in ids
         assert "asset.export_bridge" in ids
-        assert window.centralWidget() is window.viewport
+        assert "asset.delete_generated" in ids
+        assert "workspace.modeling" in ids
+        assert "workspace.generation" in ids
+        assert "view.save_layout" in ids
+        assert "view.reset_layout" in ids
+        assert "help.testing_guide" in ids
+        assert "help.create_test_cube" in ids
+        assert window.centralWidget() is window.central_splitter
+        assert window.central_splitter.widget(0) is window.viewport
+        assert window.central_splitter.widget(1) is window.editor_status_strip
+        assert bool(window.dockOptions() & QtWidgets.QMainWindow.DockOption.AllowNestedDocks)
+        assert bool(window.dockOptions() & QtWidgets.QMainWindow.DockOption.AllowTabbedDocks)
+        assert window.viewport.minimumWidth() <= 680
+        assert window._dock_widgets["graph"].minimumWidth() <= 180
         assert window.worker_panel.model.rowCount() >= 1
         assert window.content_panel.project.root == (tmp_path / "project").resolve()
+        assert window.workspace_panel.current_module_id() == "modeling"
         assert window.modeling_panel is not None
         assert window.operation_graph_panel.palette_model.rowCount() >= 1
+        assert window.viewport_panel.model.rowCount() > 0
+        assert "viewport" in window._dock_widgets
         assert window.theme_panel is not None
+        assert any(theme.id == "ghost_rigger_dark" for theme in window.theme_manager.themes())
+        assert not window.actions.get("file.save_scene").icon().isNull()
+        assert not window.actions.get("workspace.modeling").icon().isNull()
+        assert window.main_toolbar.objectName() == "GhostForgeMainToolbar"
+        assert window.workspace_toolbar.objectName() == "GhostForgeWorkspaceToolbar"
+        assert window.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        assert window.workspace_toolbar.iconSize() == QtCore.QSize(18, 18)
+        assert window.editor_status_strip.objectName() == "GhostForgeEditorBottomStrip"
+        assert "Workspace: Modeling" in window.editor_status_strip.workspace_label.text()
+        assert window.workspace_command_ids() == [
+            "file.import_mesh",
+            "edit.delete_selection",
+            "edit.undo",
+            "edit.redo",
+            "view.frame_all",
+            "view.frame_selected",
+        ]
+
+        window.activate_workspace_module("generation")
+
+        assert window.workspace_panel.current_module_id() == "generation"
+        assert window.actions.get("workspace.generation").isChecked()
+        assert window.workspace_command_ids() == ["view.refresh_runtime", "tools.worker_models"]
+        assert window.viewport.renderer.canvas.display_mode == "shaded"
+        assert window.viewport.renderer.canvas.selection_mode == "object"
+        assert window._dock_widgets["viewport"].isHidden()
+        assert not window._dock_widgets["workers"].isHidden()
+        assert not window._dock_widgets["jobs"].isHidden()
+        assert window._dock_widgets["scene"].isHidden()
+        assert "Workspace: Generation" in window.editor_status_strip.workspace_label.text()
+
+        window.activate_workspace_module("uv_materials")
+
+        assert window.viewport.renderer.canvas.display_mode == "uv"
+        assert window.viewport.renderer.canvas.selection_mode == "face"
+        assert window.viewport.renderer.canvas.navigation.profile == "blender"
+        assert window.viewport.renderer.canvas.navigation.grid_visible is False
+        assert window.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+
+        window.activate_workspace_module("sculpt_retopo")
+
+        assert window.workspace_command_ids() == ["view.frame_all", "view.frame_selected"]
+        assert window.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        assert window.workspace_toolbar.iconSize() == QtCore.QSize(20, 20)
+        assert not window.editor_status_strip.isHidden()
     finally:
         window.close()
+
+
+def test_main_window_persists_workspace_layout_state(qapp, tmp_path):
+    data_root = tmp_path / "data"
+    bridge = CoreBridge(config=CoreConfig(data_root=data_root, dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.activate_workspace_module("uv_materials")
+        window._dock_widgets["theme"].setVisible(True)
+        window.viewport.set_navigation_profile("blender")
+        window.viewport.set_camera_preset("left")
+        window.viewport.set_grid_visible(False)
+        window.save_window_layout()
+
+        assert int(window._settings.value(window._layout_settings_key("chrome_version"))) == WINDOW_LAYOUT_STATE_VERSION
+    finally:
+        window.close()
+
+    restored_bridge = CoreBridge(config=CoreConfig(data_root=data_root, dispatch_jobs=False))
+    restored = MainWindow(bridge=restored_bridge)
+    try:
+        assert restored.workspace_panel.current_module_id() == "uv_materials"
+        assert restored.actions.get("workspace.uv_materials").isChecked()
+        assert restored.viewport.renderer.canvas.navigation.profile == "blender"
+        assert restored.viewport.renderer.canvas.camera_preset == "left"
+        assert restored.viewport.renderer.canvas.navigation.grid_visible is False
+        assert not restored._dock_widgets["content"].isHidden()
+        assert not restored._dock_widgets["graph"].isHidden()
+
+        restored.reset_workspace_layout()
+
+        assert restored.workspace_panel.current_module_id() == "uv_materials"
+        assert restored._dock_widgets["workers"].isHidden()
+        assert int(restored._settings.value(restored._layout_settings_key("chrome_version"))) == WINDOW_LAYOUT_STATE_VERSION
+    finally:
+        restored.close()
+
+
+def test_main_window_discards_stale_saved_chrome_state(qapp, tmp_path):
+    data_root = tmp_path / "stale_data"
+    scope = settings_scope_for_path(data_root)
+    settings = QtCore.QSettings("Ghost Forge", "Ghost Forge")
+    settings.setValue(f"layouts/{scope}/workspace", "generation")
+    settings.setValue(f"layouts/{scope}/chrome_version", 0)
+    settings.setValue(f"layouts/{scope}/geometry", QtCore.QByteArray(b"old_geometry"))
+    settings.setValue(f"layouts/{scope}/state", QtCore.QByteArray(b"old_state"))
+    settings.sync()
+
+    bridge = CoreBridge(config=CoreConfig(data_root=data_root, dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        assert window.workspace_panel.current_module_id() == "generation"
+        assert window._settings.value(window._layout_settings_key("geometry")) is None
+        assert window._settings.value(window._layout_settings_key("state")) is None
+        assert int(window._settings.value(window._layout_settings_key("chrome_version"))) == WINDOW_LAYOUT_STATE_VERSION
+        assert window._dock_widgets["viewport"].isHidden()
+        assert not window._dock_widgets["workers"].isHidden()
+    finally:
+        window.close()
+
+
+def test_main_window_reloads_workspace_layouts_and_reapplies_active_module(qapp, tmp_path, monkeypatch):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.activate_workspace_module("generation")
+        layouts = default_workspace_layouts()
+        layouts["generation"] = replace(
+            layouts["generation"],
+            layout_id="generation_reloaded_test",
+            name="Generation Reloaded Test",
+            toolbar=ToolbarLayout(workspace_button_mode="iconOnly", workspace_icon_size=15),
+            spacing={
+                "margin": 4,
+                "panelSpacing": 4,
+                "toolbarSpacing": 2,
+                "inputHeight": 32,
+                "tableRowHeight": 31,
+                "treeRowHeight": 29,
+            },
+        )
+
+        def fake_load_workspace_layouts(*, selected_layout_ids=None):
+            return WorkspaceLayoutLoadResult(
+                layouts=layouts,
+                diagnostics=("custom generation layout warning",),
+            )
+
+        monkeypatch.setattr(main_window_module, "load_workspace_layouts", fake_load_workspace_layouts)
+
+        window.reload_workspace_layouts()
+
+        assert window.workspace_layouts["generation"].layout_id == "generation_reloaded_test"
+        assert window.workspace_panel.current_module_id() == "generation"
+        assert "Generation Reloaded Test" in window.workspace_panel.summary.text()
+        assert "custom generation layout warning" in window.workspace_panel.layout_diagnostics.text()
+        assert window.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        assert window.workspace_toolbar.iconSize() == QtCore.QSize(15, 15)
+        assert window.workspace_toolbar.layout().spacing() == 2
+        assert window.workspace_panel.layout().spacing() == 4
+        assert window.workspace_panel.view.verticalHeader().defaultSectionSize() == 31
+        assert window.viewport.camera_combo.minimumHeight() == 32
+        assert window.central_splitter.handleWidth() == 6
+        assert window.content_panel.tree.uniformRowHeights() is True
+        assert "1 diagnostics" in window.statusBar().currentMessage()
+    finally:
+        window.close()
+
+
+def test_main_window_loads_and_reloads_workspace_modules(qapp, tmp_path, monkeypatch):
+    base_modules = default_workspace_modules()
+    module_path = tmp_path / "modeling_plus.json"
+    first_modeling = replace(
+        base_modules[0],
+        label="Modeling Plus",
+        status="custom",
+        toolbar_action_ids=("view.frame_all",),
+        viewport_defaults=WorkspaceViewportDefaults(
+            display_mode="xray",
+            selection_mode="face",
+            transform_mode="move",
+            navigation_profile="blender",
+            grid_visible=False,
+            snap_enabled=True,
+            gizmo_orientation="local",
+            gizmo_pivot="object_origin",
+        ),
+        source_path=module_path,
+    )
+    reloaded_modeling = replace(
+        first_modeling,
+        label="Modeling Reloaded",
+        toolbar_action_ids=("file.import_mesh", "view.frame_all"),
+        viewport_defaults=replace(first_modeling.viewport_defaults, display_mode="solid"),
+    )
+    current_result = {
+        "value": WorkspaceModuleLoadResult(
+            modules=(first_modeling, *base_modules[1:]),
+            diagnostics=("custom module warning",),
+        )
+    }
+
+    def fake_load_workspace_modules():
+        return current_result["value"]
+
+    monkeypatch.setattr(main_window_module, "load_workspace_modules", fake_load_workspace_modules)
+
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        canvas = window.viewport.renderer.canvas
+
+        assert window.workspace_modules[0].label == "Modeling Plus"
+        assert window.actions.get("workspace.modeling").text() == "Modeling Plus"
+        assert "custom module warning" in window.workspace_panel.module_diagnostics.text()
+        assert window.workspace_command_ids() == ["view.frame_all"]
+        assert canvas.display_mode == "xray"
+        assert canvas.selection_mode == "face"
+        assert canvas.navigation.profile == "blender"
+        assert canvas.navigation.grid_visible is False
+        assert canvas.navigation.snap_enabled is True
+        assert canvas.gizmo_orientation == "local"
+        assert canvas.gizmo_pivot == "object_origin"
+
+        current_result["value"] = WorkspaceModuleLoadResult(
+            modules=(reloaded_modeling, *base_modules[1:]),
+            diagnostics=(),
+        )
+        window.reload_workspace_modules()
+
+        assert window.workspace_modules[0].label == "Modeling Reloaded"
+        assert window.actions.get("workspace.modeling").text() == "Modeling Reloaded"
+        assert window.workspace_panel.current_module_id() == "modeling"
+        assert "Module diagnostics: clean." in window.workspace_panel.module_diagnostics.text()
+        assert window.workspace_command_ids() == ["file.import_mesh", "view.frame_all"]
+        assert canvas.display_mode == "solid"
+    finally:
+        window.close()
+
+
+def test_main_window_workspace_resource_watcher_reloads_modules_and_layouts(qapp, tmp_path, monkeypatch):
+    module_dir = tmp_path / "workspace_modules"
+    layout_dir = tmp_path / "workspace_layouts"
+    module_dir.mkdir()
+    layout_dir.mkdir()
+    base_modules = default_workspace_modules()
+    base_layouts = default_workspace_layouts()
+    reloaded_modeling = replace(
+        base_modules[0],
+        label="Modeling Watched",
+        toolbar_action_ids=("view.frame_all",),
+        source_path=module_dir / "modeling.json",
+    )
+    watched_layouts = dict(base_layouts)
+    watched_layouts["modeling"] = replace(
+        base_layouts["modeling"],
+        layout_id="modeling_watched_layout",
+        name="Modeling Watched Layout",
+        toolbar=ToolbarLayout(workspace_button_mode="iconOnly", workspace_icon_size=13),
+        source_path=str(layout_dir / "modeling.json"),
+    )
+    module_result = {
+        "value": WorkspaceModuleLoadResult(
+            modules=base_modules,
+            diagnostics=(),
+            module_dirs=(module_dir,),
+        )
+    }
+    layout_result = {
+        "value": WorkspaceLayoutLoadResult(
+            layouts=base_layouts,
+            diagnostics=(),
+            layout_dirs=(layout_dir,),
+        )
+    }
+
+    def fake_load_workspace_modules():
+        return module_result["value"]
+
+    def fake_load_workspace_layouts(*, selected_layout_ids=None):
+        return layout_result["value"]
+
+    monkeypatch.setattr(main_window_module, "load_workspace_modules", fake_load_workspace_modules)
+    monkeypatch.setattr(main_window_module, "load_workspace_layouts", fake_load_workspace_layouts)
+
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.set_workspace_live_reload_enabled(True)
+
+        assert window.workspace_panel.live_reload_check.isChecked()
+        assert "Workspace resources: watching" in window.workspace_panel.resource_watch_label.text()
+
+        module_result["value"] = WorkspaceModuleLoadResult(
+            modules=(reloaded_modeling, *base_modules[1:]),
+            diagnostics=("module watch warning",),
+            module_dirs=(module_dir,),
+        )
+        window.workspace_resource_watcher.trigger_reload("modules")
+
+        assert window.workspace_modules[0].label == "Modeling Watched"
+        assert window.actions.get("workspace.modeling").text() == "Modeling Watched"
+        assert "module watch warning" in window.workspace_panel.module_diagnostics.text()
+
+        layout_result["value"] = WorkspaceLayoutLoadResult(
+            layouts=watched_layouts,
+            diagnostics=("layout watch warning",),
+            layout_dirs=(layout_dir,),
+        )
+        window.workspace_resource_watcher.trigger_reload("layouts")
+
+        assert window.workspace_layouts["modeling"].layout_id == "modeling_watched_layout"
+        assert "Modeling Watched Layout" in window.workspace_panel.summary.text()
+        assert "layout watch warning" in window.workspace_panel.layout_diagnostics.text()
+        assert window.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        assert window.workspace_toolbar.iconSize() == QtCore.QSize(13, 13)
+    finally:
+        window.close()
+
+
+def test_main_window_selects_and_persists_workspace_layout_preset(qapp, tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    base_layouts = default_workspace_layouts()
+    modeling_preset = replace(
+        base_layouts["modeling"],
+        layout_id="modeling_artist_test",
+        name="Modeling Artist Test",
+        toolbar=ToolbarLayout(workspace_button_mode="iconOnly", workspace_icon_size=14),
+        spacing={
+            "margin": 4,
+            "panelSpacing": 4,
+            "toolbarSpacing": 2,
+            "inputHeight": 24,
+            "tableRowHeight": 21,
+            "treeRowHeight": 21,
+        },
+    )
+    available = {module_id: (layout,) for module_id, layout in base_layouts.items()}
+    available["modeling"] = (base_layouts["modeling"], modeling_preset)
+
+    def fake_load_workspace_layouts(*, selected_layout_ids=None):
+        selected_layout_ids = selected_layout_ids or {}
+        layouts = dict(base_layouts)
+        if selected_layout_ids.get("modeling") == "modeling_artist_test":
+            layouts["modeling"] = modeling_preset
+        return WorkspaceLayoutLoadResult(
+            layouts=layouts,
+            available_layouts=available,
+            selected_layout_ids={module_id: layout.layout_id for module_id, layout in layouts.items()},
+        )
+
+    monkeypatch.setattr(main_window_module, "load_workspace_layouts", fake_load_workspace_layouts)
+
+    bridge = CoreBridge(config=CoreConfig(data_root=data_root, dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        assert window.workspace_layouts["modeling"].layout_id == "modeling_default"
+        assert window.workspace_panel.layout_combo.findData("modeling_artist_test") >= 0
+
+        window.select_workspace_layout("modeling", "modeling_artist_test")
+
+        assert window.workspace_layouts["modeling"].layout_id == "modeling_artist_test"
+        assert window.workspace_panel.layout_combo.currentData() == "modeling_artist_test"
+        assert window.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        assert window.workspace_toolbar.iconSize() == QtCore.QSize(14, 14)
+        assert window.workspace_toolbar.layout().spacing() == 2
+    finally:
+        window.close()
+
+    restored_bridge = CoreBridge(config=CoreConfig(data_root=data_root, dispatch_jobs=False))
+    restored = MainWindow(bridge=restored_bridge)
+    try:
+        assert restored.workspace_layouts["modeling"].layout_id == "modeling_artist_test"
+        assert restored.workspace_panel.layout_combo.currentData() == "modeling_artist_test"
+        assert restored.workspace_toolbar.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+    finally:
+        restored.close()
 
 
 def test_main_window_opens_and_reveals_graph_result_paths(qapp, tmp_path, monkeypatch):
@@ -77,6 +462,117 @@ def test_main_window_opens_and_reveals_graph_result_paths(qapp, tmp_path, monkey
         assert revealed[-1] == asset_dir
 
         assert not window._open_graph_result_path(str(tmp_path / "missing.glb"))
+    finally:
+        window.close()
+
+
+def test_main_window_create_test_cube_imports_known_mesh(qapp, tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        target = window.create_test_cube()
+
+        assert target is not None
+        assert target.exists()
+        assert target.name == "ghostforge_test_cube.glb"
+        assert window.scene_model.rowCount() == 1
+        assert window.scene_model.records()[0].path == target
+        assert "Test cube imported" in window.statusBar().currentMessage()
+    finally:
+        window.close()
+
+
+def test_main_window_deletes_scene_objects_and_undoes(qapp, tmp_path):
+    source_a = tmp_path / "cube_a.glb"
+    source_b = tmp_path / "cube_b.glb"
+    trimesh.creation.box(extents=(1, 1, 1)).export(source_a)
+    trimesh.creation.box(extents=(2, 1, 1)).export(source_b)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source_a)
+        window.import_mesh(source_b)
+        first = window.scene_model.records()[0]
+        second = window.scene_model.records()[1]
+        window.scene_panel.view.selectRow(0)
+
+        removed = window._delete_selected_scene_objects(confirm=False)
+
+        assert [record.object_id for record in removed] == [first.object_id]
+        assert window.scene_model.rowCount() == 1
+        assert window.scene_model.records()[0].object_id == second.object_id
+        assert len(window.viewport.renderer.canvas.objects) == 1
+        assert window.operation_history.undo_stack[-1].label == "delete_scene_objects"
+
+        window.undo_operation()
+
+        assert window.scene_model.rowCount() == 2
+        assert [record.object_id for record in window.scene_model.records()] == [first.object_id, second.object_id]
+        assert len(window.viewport.renderer.canvas.objects) == 2
+
+        window.redo_operation()
+
+        assert window.scene_model.rowCount() == 1
+        assert window.scene_model.records()[0].object_id == second.object_id
+    finally:
+        window.close()
+
+
+def test_main_window_deletes_selected_generated_files_safely(qapp, tmp_path):
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        graph_dir = window.project_service.root / "outputs" / "graphs" / "graph_cleanup"
+        graph_dir.mkdir(parents=True)
+        mesh_path = graph_dir / "graph_result.glb"
+        trimesh.creation.box(extents=(1, 1, 1)).export(mesh_path)
+        asset_dir = window.project_service.root / "assets" / "generated_obj" / "graph_result"
+        asset_dir.mkdir(parents=True)
+        manifest_path = asset_dir / "asset_manifest.json"
+        manifest_path.write_text("{}", encoding="utf-8")
+        (graph_dir / "side_effect.txt").write_text("artifact", encoding="utf-8")
+        info = bridge.mesh_info(mesh_path)
+        record = SceneObjectRecord(
+            object_id="generated_obj",
+            name="generated_obj",
+            path=mesh_path,
+            vertices=info.vertices,
+            faces=info.faces,
+            watertight=info.watertight,
+            asset_dir=asset_dir,
+            manifest_path=manifest_path,
+            operation_graph_history=({"status": "succeeded", "output_path": str(mesh_path)},),
+        )
+        window.scene_model.add_record(record)
+        window.scene_panel.view.selectRow(0)
+
+        removed = window._delete_selected_generated_assets(confirm=False)
+
+        assert set(removed) == {graph_dir.resolve(), asset_dir.resolve()}
+        assert not graph_dir.exists()
+        assert not asset_dir.exists()
+        assert window.scene_model.rowCount() == 0
+        assert not window.operation_history.undo_stack
+    finally:
+        window.close()
+
+
+def test_main_window_generated_delete_does_not_remove_imported_source(qapp, tmp_path):
+    source = tmp_path / "external_source.glb"
+    trimesh.creation.box(extents=(1, 1, 1)).export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source)
+        record = window.scene_model.records()[0]
+
+        removed = window._delete_selected_generated_assets(confirm=False)
+
+        assert removed == ()
+        assert source.exists()
+        assert record.asset_dir is not None
+        assert record.asset_dir.exists()
+        assert window.scene_model.rowCount() == 1
     finally:
         window.close()
 
@@ -440,6 +936,47 @@ def test_main_window_updates_selection_from_viewport_pick(qapp, tmp_path):
         assert pick.vertex_index in window.mesh_selection.selected_vertices
         assert window.viewport.renderer.canvas.active_object_id == record.object_id
         assert pick.vertex_index in window.viewport.renderer.canvas.selected_vertices
+    finally:
+        window.close()
+
+
+def test_main_window_applies_viewport_transform_gizmo_edits(qapp, tmp_path):
+    source = tmp_path / "cube.glb"
+    trimesh.creation.box(extents=(1, 1, 1)).export(source)
+    bridge = CoreBridge(config=CoreConfig(data_root=tmp_path / "data", dispatch_jobs=False))
+    window = MainWindow(bridge=bridge)
+    try:
+        window.import_mesh(source)
+        record = window.scene_model.records()[0]
+        before = record.transform
+        transform = TransformState(translate=(2.5, 0.0, 0.0))
+        edit = TransformGizmoEdit(
+            object_id=record.object_id,
+            mode="move",
+            axis="x",
+            transform=transform,
+            scalar_delta=2.5,
+            phase="end",
+            before_transform=before,
+        )
+
+        window._viewport_transform_edited(edit)
+
+        updated = window.scene_model.records()[0]
+        assert updated.transform.translate == (2.5, 0.0, 0.0)
+        assert window.mesh_selection.active_object_id == record.object_id
+        assert window.mesh_selection.selected_object_ids == {record.object_id}
+        assert window.viewport.renderer.canvas.objects[0].transform.translate == (2.5, 0.0, 0.0)
+        assert window.modeling_panel.transform().translate == (2.5, 0.0, 0.0)
+        assert len(window.operation_history.undo_stack) == 1
+
+        window.undo_operation()
+        assert window.scene_model.records()[0].transform == before
+        assert window.viewport.renderer.canvas.objects[0].transform == before
+        assert window.modeling_panel.transform() == before
+
+        window.redo_operation()
+        assert window.scene_model.records()[0].transform == transform
     finally:
         window.close()
 

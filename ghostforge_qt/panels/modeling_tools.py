@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
+
 from PySide6 import QtCore, QtWidgets
 
 from ghostforge_qt.models.scene_model import TransformState
@@ -11,54 +13,111 @@ class ModelingToolsPanel(QtWidgets.QWidget):
     transformModeRequested = QtCore.Signal(str)
     toolRequested = QtCore.Signal(str)
     transformEdited = QtCore.Signal(object)
+    deleteSceneRequested = QtCore.Signal()
+    deleteGeneratedRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._selection_buttons: dict[str, QtWidgets.QToolButton] = {}
         self._transform_buttons: dict[str, QtWidgets.QToolButton] = {}
+        self._command_buttons: dict[str, QtWidgets.QPushButton] = {}
         self._translate: dict[str, QtWidgets.QDoubleSpinBox] = {}
         self._rotate: dict[str, QtWidgets.QDoubleSpinBox] = {}
         self._scale: dict[str, QtWidgets.QDoubleSpinBox] = {}
         self._status_labels: dict[str, QtWidgets.QLabel] = {}
+        self._scroll_areas: list[QtWidgets.QScrollArea] = []
         self.status = QtWidgets.QLabel("Ready")
+        self.status.setObjectName("GhostForgeModelingStatus")
         self.status.setWordWrap(True)
         self._build()
 
     def _build(self) -> None:
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(6)
-        root.addWidget(self._selection_group())
-        root.addWidget(self._selection_tools_group())
-        root.addWidget(self._transform_group())
-        root.addWidget(self._transform_typein_group())
-        root.addWidget(self._options_group())
-        root.addWidget(self._geometry_group())
-        root.addWidget(self._cleanup_group())
-        root.addWidget(self._status_group())
-        root.addWidget(self.status)
-        root.addStretch(1)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(4)
+
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setObjectName("GhostForgeModelingTabs")
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.addTab(
+            self._scroll_page("Select", (self._selection_group(), self._selection_tools_group(), self._status_group())),
+            "Select",
+        )
+        self.tabs.addTab(
+            self._scroll_page("Transform", (self._transform_group(), self._transform_typein_group())),
+            "Transform",
+        )
+        self.tabs.addTab(
+            self._scroll_page("MeshOps", (self._options_group(), self._geometry_group(), self._cleanup_group())),
+            "Mesh Ops",
+        )
+        root.addWidget(self.tabs, 1)
+        root.addWidget(self.status, 0)
+
+    def _scroll_page(self, name: str, widgets: Iterable[QtWidgets.QWidget]) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        page.setObjectName(f"GhostForgeModeling{name}Page")
+        page_layout = QtWidgets.QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName(f"GhostForgeModeling{name}Scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._scroll_areas.append(scroll)
+
+        content = QtWidgets.QWidget()
+        body = QtWidgets.QVBoxLayout(content)
+        body.setContentsMargins(4, 4, 4, 4)
+        body.setSpacing(6)
+        for widget in widgets:
+            body.addWidget(widget)
+        body.addStretch(1)
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+        return page
 
     def _selection_group(self) -> QtWidgets.QGroupBox:
         return self._button_group(
-            "Selection",
+            "Selection Mode",
             ["object", "vertex", "edge", "border", "face", "element"],
             self._selection_buttons,
             self.selectionModeRequested,
+            columns=3,
         )
 
     def _selection_tools_group(self) -> QtWidgets.QGroupBox:
-        return self._selection_command_group(
-            "Selection Tools",
-            ["select_all", "clear_selection", "invert_selection"],
+        box = QtWidgets.QGroupBox("Selection Actions")
+        grid = QtWidgets.QGridLayout(box)
+        commands: tuple[tuple[str, str, Callable[[], None]], ...] = (
+            ("select_all", "Select All", lambda: self.selectionToolRequested.emit("select_all")),
+            ("clear_selection", "Clear Selection", lambda: self.selectionToolRequested.emit("clear_selection")),
+            ("invert_selection", "Invert Selection", lambda: self.selectionToolRequested.emit("invert_selection")),
+            ("delete_scene", "Delete From Scene", self.deleteSceneRequested.emit),
+            ("delete_generated", "Delete Generated Files", self.deleteGeneratedRequested.emit),
         )
+        for index, (name, label, callback) in enumerate(commands):
+            button = self._push_button(label, callback)
+            button.setObjectName(f"GhostForgeModeling{name.title().replace('_', '')}Button")
+            self._command_buttons[name] = button
+            span = 2 if name == "delete_generated" else 1
+            row = index // 2
+            column = index % 2
+            if span == 2:
+                row += 1
+                column = 0
+            grid.addWidget(button, row, column, 1, span)
+        return box
 
     def _transform_group(self) -> QtWidgets.QGroupBox:
         return self._button_group(
-            "Transform",
+            "Transform Mode",
             ["move", "rotate", "scale", "pivot"],
             self._transform_buttons,
             self.transformModeRequested,
+            columns=2,
         )
 
     def _geometry_group(self) -> QtWidgets.QGroupBox:
@@ -78,17 +137,21 @@ class ModelingToolsPanel(QtWidgets.QWidget):
                 "recenter",
                 "apply_material",
             ],
+            columns=2,
         )
 
     def _cleanup_group(self) -> QtWidgets.QGroupBox:
         return self._command_group(
             "Cleanup",
             ["recalculate_normals", "flip_normals", "remove_isolated", "decimate", "normalize_scale", "unwrap_uvs"],
+            columns=2,
         )
 
     def _options_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Operation Options")
         form = QtWidgets.QFormLayout(box)
+        form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         self.weld_tolerance = self._spin(0.000001, 1.0, 0.001, 0.001)
         self.decimate_ratio = self._spin(0.01, 1.0, 0.5, 0.05)
         self.smooth_iterations = QtWidgets.QSpinBox()
@@ -109,6 +172,9 @@ class ModelingToolsPanel(QtWidgets.QWidget):
     def _transform_typein_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Transform Type-In")
         grid = QtWidgets.QGridLayout(box)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        grid.setColumnStretch(3, 1)
         grid.addWidget(QtWidgets.QLabel("Axis"), 0, 0)
         grid.addWidget(QtWidgets.QLabel("Move"), 0, 1)
         grid.addWidget(QtWidgets.QLabel("Rotate"), 0, 2)
@@ -124,8 +190,7 @@ class ModelingToolsPanel(QtWidgets.QWidget):
             for col, spin in enumerate((move, rotate, scale), start=1):
                 spin.valueChanged.connect(lambda _value=0.0: self._emit_transform())
                 grid.addWidget(spin, row, col)
-        reset = QtWidgets.QPushButton("Reset Transform")
-        reset.clicked.connect(lambda: self.set_transform(TransformState()))
+        reset = self._push_button("Reset Transform", lambda: self.set_transform(TransformState()))
         grid.addWidget(reset, 4, 0, 1, 4)
         return box
 
@@ -135,6 +200,8 @@ class ModelingToolsPanel(QtWidgets.QWidget):
         spin.setDecimals(3)
         spin.setSingleStep(step)
         spin.setValue(value)
+        spin.setMinimumWidth(70)
+        spin.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         return spin
 
     def _button_group(
@@ -143,41 +210,51 @@ class ModelingToolsPanel(QtWidgets.QWidget):
         names: list[str],
         registry: dict[str, QtWidgets.QToolButton],
         signal: QtCore.Signal,
+        *,
+        columns: int,
     ) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox(title)
         grid = QtWidgets.QGridLayout(box)
-        for i, name in enumerate(names):
+        grid.setColumnStretch(0, 1)
+        for column in range(1, columns):
+            grid.setColumnStretch(column, 1)
+        for index, name in enumerate(names):
             button = QtWidgets.QToolButton()
             button.setText(name.replace("_", " ").title())
             button.setCheckable(True)
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+            button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+            button.setMinimumHeight(28)
             button.clicked.connect(lambda _checked=False, value=name: signal.emit(value))
             registry[name] = button
-            grid.addWidget(button, i // 2, i % 2)
+            grid.addWidget(button, index // columns, index % columns)
         if names:
             registry[names[0]].setChecked(True)
         return box
 
-    def _command_group(self, title: str, names: list[str]) -> QtWidgets.QGroupBox:
+    def _command_group(self, title: str, names: list[str], *, columns: int) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox(title)
         grid = QtWidgets.QGridLayout(box)
-        for i, name in enumerate(names):
-            button = QtWidgets.QPushButton(name.replace("_", " ").title())
-            button.clicked.connect(lambda _checked=False, value=name: self._request_tool(value))
-            grid.addWidget(button, i // 2, i % 2)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        for index, name in enumerate(names):
+            button = self._push_button(name.replace("_", " ").title(), lambda value=name: self._request_tool(value))
+            self._command_buttons[name] = button
+            grid.addWidget(button, index // columns, index % columns)
         return box
 
-    def _selection_command_group(self, title: str, names: list[str]) -> QtWidgets.QGroupBox:
-        box = QtWidgets.QGroupBox(title)
-        grid = QtWidgets.QGridLayout(box)
-        for i, name in enumerate(names):
-            button = QtWidgets.QPushButton(name.replace("_", " ").title())
-            button.clicked.connect(lambda _checked=False, value=name: self.selectionToolRequested.emit(value))
-            grid.addWidget(button, i // 2, i % 2)
-        return box
+    def _push_button(self, label: str, callback: Callable[[], None]) -> QtWidgets.QPushButton:
+        button = QtWidgets.QPushButton(label)
+        button.setMinimumHeight(28)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        button.clicked.connect(lambda _checked=False: callback())
+        return button
 
     def _status_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Mesh Status")
         form = QtWidgets.QFormLayout(box)
+        form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         for label, key in (
             ("Active Object", "active"),
             ("Selection Mode", "mode"),
@@ -190,6 +267,21 @@ class ModelingToolsPanel(QtWidgets.QWidget):
             self._status_labels[key] = value
             form.addRow(label, value)
         return box
+
+    def apply_ghost_layout(self, layout) -> None:  # noqa: ANN001 - shared layout hook
+        margin = max(3, int(layout.spacing_value("margin", 4)))
+        spacing = max(3, int(layout.spacing_value("panelSpacing", 4)))
+        button_height = max(24, int(layout.spacing_value("modelingButtonHeight", 28)))
+        root = self.layout()
+        if root is not None:
+            root.setContentsMargins(margin, margin, margin, margin)
+            root.setSpacing(spacing)
+        self.tabs.tabBar().setMinimumHeight(max(18, int(layout.spacing_value("tabHeight", 18))))
+        for scroll in self._scroll_areas:
+            scroll.widget().layout().setContentsMargins(margin, margin, margin, margin)
+            scroll.widget().layout().setSpacing(spacing)
+        for button in (*self._selection_buttons.values(), *self._transform_buttons.values(), *self._command_buttons.values()):
+            button.setMinimumHeight(button_height)
 
     def _request_tool(self, tool_name: str) -> None:
         self.status.setText(f"{tool_name.replace('_', ' ').title()} requested. Operation graph wiring is next.")
@@ -205,7 +297,7 @@ class ModelingToolsPanel(QtWidgets.QWidget):
             scale=tuple(self._scale[a].value() for a in ("X", "Y", "Z")),
         )
 
-    def set_transform(self, transform: TransformState) -> None:
+    def set_transform(self, transform: TransformState, *, emit: bool = True) -> None:
         for axis, value in zip(("X", "Y", "Z"), transform.translate):
             self._translate[axis].blockSignals(True)
             self._translate[axis].setValue(float(value))
@@ -218,7 +310,8 @@ class ModelingToolsPanel(QtWidgets.QWidget):
             self._scale[axis].blockSignals(True)
             self._scale[axis].setValue(float(value))
             self._scale[axis].blockSignals(False)
-        self._emit_transform()
+        if emit:
+            self._emit_transform()
 
     @QtCore.Slot(str)
     def set_selection_mode(self, mode: str) -> None:

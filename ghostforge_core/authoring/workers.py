@@ -22,7 +22,7 @@ from ..workers.schemas import (
 )
 from .registry import Operation, OperationContext, OperationError, make_operation
 
-SOURCE_OPERATION_KINDS = frozenset({"generate_text_to_3d", "generate_image_to_3d"})
+SOURCE_OPERATION_KINDS = frozenset({"create_box", "generate_text_to_3d", "generate_image_to_3d"})
 
 
 def _node_dir(ctx: OperationContext, kind: str) -> Path:
